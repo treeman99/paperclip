@@ -89,12 +89,29 @@ describe("환경 변수 생성", () => {
     expect(env.PAPERCLIP_OPENCODE_PROVIDERS).not.toContain("sk-");
   });
 
-  it("토큰을 직접 적으면 그대로 쓴다", () => {
+  it("파일에 직접 적은 토큰도 참조로만 내보낸다", () => {
+    // 개인 PC에서는 토큰을 파일에 두는 편이 편하지만, 그렇다고 생성된 설정이나
+    // 실행 기록에 평문이 남아서는 안 된다.
     const env = buildLaneEnv({
       inHouse: { baseUrl: "https://x/v1", model: "m", apiKey: "sk-직접", providerId: "corp", npm: "@ai-sdk/openai-compatible" },
       disableTelemetry: false,
     });
-    expect(JSON.parse(env.PAPERCLIP_OPENCODE_PROVIDERS).corp.options.apiKey).toBe("sk-직접");
+    expect(env.PAPERCLIP_OPENCODE_PROVIDERS).not.toContain("sk-직접");
+    expect(JSON.parse(env.PAPERCLIP_OPENCODE_PROVIDERS).corp.options.apiKey)
+      .toBe("{env:PAPERCLIP_INHOUSE_LLM_KEY}");
+    // 실제 값은 전용 변수에만 담긴다.
+    expect(env.PAPERCLIP_INHOUSE_LLM_KEY).toBe("sk-직접");
+  });
+
+  it("토큰을 담은 전용 변수는 자식 프로세스로 전달되지 않는 이름을 쓴다", () => {
+    // sanitizeInheritedPaperclipEnv가 PAPERCLIP_ 접두사를 자식 환경에서 제거하므로,
+    // 이 이름을 쓰면 토큰이 CLI 프로세스로 새지 않는다.
+    const env = buildLaneEnv({
+      inHouse: { baseUrl: "https://x/v1", model: "m", apiKey: "sk-x", providerId: "corp", npm: "@ai-sdk/openai-compatible" },
+      disableTelemetry: false,
+    });
+    const tokenVar = Object.keys(env).find((k) => env[k] === "sk-x");
+    expect(tokenVar).toMatch(/^PAPERCLIP_/);
   });
 
   it("토큰이 아예 없으면 무엇이 빠졌는지 알려준다", () => {

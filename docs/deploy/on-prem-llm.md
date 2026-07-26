@@ -39,7 +39,7 @@ summary: AWS Bedrock의 Claude와 사내 오픈웨이트 모델, 두 가지만 �
   "inHouse": {
     "baseUrl": "https://llm.corp.internal/v1",
     "model": "my-coder-model",
-    "apiKeyEnv": "CORP_LLM_KEY",
+    "apiKey": "받으신-토큰",
     "providerId": "corp",
     "label": "사내 모델"
   },
@@ -54,16 +54,20 @@ summary: AWS Bedrock의 Claude와 사내 오픈웨이트 모델, 두 가지만 �
 |------|------|------|
 | `inHouse.baseUrl` | ✅ | 사내 서버 주소. 끝의 `/v1`까지 포함합니다 |
 | `inHouse.model` | ✅ | 모델 이름. 앞에 provider를 붙이지 않은 순수 이름 |
-| `inHouse.apiKeyEnv` | 둘 중 하나 | 토큰이 담긴 환경 변수 **이름** (권장) |
 | `inHouse.apiKey` | 둘 중 하나 | 토큰을 파일에 직접 적는 경우 |
+| `inHouse.apiKeyEnv` | 둘 중 하나 | 토큰을 환경 변수로 넘길 때 그 **변수 이름** |
 | `inHouse.providerId` | | 모델 앞에 붙는 이름. 기본값 `corp` |
 | `inHouse.label` | | 화면에 표시할 이름 |
 | `inHouse.npm` | | OpenAI 호환이 아닐 때만 변경. 기본값 `@ai-sdk/openai-compatible` |
 | `bedrock.region` | ✅ | Bedrock을 쓸 경우의 리전 |
 | `disableTelemetry` | | 기본값 `true` |
 
-`apiKeyEnv`를 쓰면 생성되는 설정에 토큰 대신 `{env:CORP_LLM_KEY}` 참조만 남으므로,
-실행 기록에 토큰이 남지 않습니다. 가급적 이쪽을 쓰세요.
+토큰을 `apiKey`로 파일에 직접 적어도 평문이 새어 나가지 않습니다. 값을 전용 변수로
+옮기고 생성되는 설정에는 참조만 남기며, 그 변수 이름에 `PAPERCLIP_` 접두사를 써서
+자식 프로세스 환경에서 제거되도록 했습니다. 즉 AI 프로그램은 토큰을 보지 못합니다.
+
+다만 **파일 자체는 여전히 평문**이므로 파일이 있는 폴더의 접근 권한을 제한하세요.
+토큰을 파일에 두는 것이 정책상 곤란하면 `apiKeyEnv`로 변수 이름만 적으면 됩니다.
 
 ### 이 파일이 만들어 주는 것
 

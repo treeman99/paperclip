@@ -26,6 +26,8 @@ import { resolvePaperclipConfigPath } from "../paths.js";
 
 const DEFAULT_FILE_NAME = "llm-lanes.json";
 const DEFAULT_PROVIDER_ID = "corp";
+/** 설정 파일에 직접 적은 토큰을 옮겨 담는 전용 변수. */
+const GENERATED_API_KEY_ENV_VAR = "PAPERCLIP_INHOUSE_LLM_KEY";
 
 const inHouseLaneSchema = z.object({
   /** 예: https://llm.corp.internal/v1 — 끝에 /v1 까지 포함한다. */
@@ -81,7 +83,33 @@ export function readLlmLaneConfig(filePath = resolveLlmLaneConfigPath()): LlmLan
       .join("; ");
     throw new Error(`LLM 설정 파일이 올바르지 않습니다 (${filePath}): ${detail}`);
   }
+  if (parsed.data.inHouse?.apiKey) warnIfConfigFileIsReadable(filePath);
   return parsed.data;
+}
+
+/**
+ * 토큰을 파일에 직접 적은 경우에만 권한을 확인한다.
+ *
+ * Windows에서는 파일 모드가 의미가 없어 상위 폴더의 ACL이 실질적인 통제 수단이므로,
+ * 검사 대신 안내만 한다.
+ */
+function warnIfConfigFileIsReadable(filePath: string) {
+  if (process.platform === "win32") {
+    console.warn(
+      `[paperclip] ${filePath} 에 토큰이 들어 있습니다. 이 파일이 있는 폴더의 접근 권한을 제한했는지 확인하세요.`,
+    );
+    return;
+  }
+  try {
+    const mode = fs.statSync(filePath).mode & 0o777;
+    if (mode & 0o077) {
+      console.warn(
+        `[paperclip] ${filePath} 권한이 ${mode.toString(8)} 입니다. 토큰이 들어 있으므로 chmod 600 을 권장합니다.`,
+      );
+    }
+  } catch {
+    // 권한 확인 실패가 기동을 막을 이유는 없다.
+  }
 }
 
 /**
@@ -95,12 +123,22 @@ export function buildLaneEnv(config: LlmLaneConfig): Record<string, string> {
     const lane = config.inHouse;
     const providerId = lane.providerId;
     const qualifiedModel = `${providerId}/${lane.model}`;
-    // 토큰은 가능하면 {env:VAR} 참조로 남긴다. 그래야 생성된 설정과 실행 로그에
-    // 평문 토큰이 남지 않는다.
-    const apiKeyValue = lane.apiKeyEnv ? `{env:${lane.apiKeyEnv}}` : lane.apiKey;
-    if (!apiKeyValue) {
+    if (!lane.apiKeyEnv && !lane.apiKey) {
       throw new Error("inHouse 설정에는 apiKey 또는 apiKeyEnv 중 하나가 필요합니다.");
     }
+    // 토큰은 항상 {env:VAR} 참조로만 내보낸다. 파일에 직접 적은 경우에도 값을
+    // 전용 변수에 옮기고 참조만 남긴다. 그래야 생성된 provider 설정과 실행 기록
+    // 어디에도 평문 토큰이 나타나지 않는다.
+    //
+    // 전용 변수 이름에 PAPERCLIP_ 접두사를 쓴 것은 의도적이다:
+    // sanitizeInheritedPaperclipEnv가 자식 프로세스 환경에서 이 접두사를 제거하므로
+    // 토큰이 CLI 프로세스로 새어 나가지 않는다. 치환은 서버 프로세스 안에서
+    // 일어나므로 동작에는 지장이 없다.
+    const apiKeyEnvVar = lane.apiKeyEnv ?? GENERATED_API_KEY_ENV_VAR;
+    if (!lane.apiKeyEnv && lane.apiKey) {
+      env[apiKeyEnvVar] = lane.apiKey;
+    }
+    const apiKeyValue = `{env:${apiKeyEnvVar}}`;
 
     env.PAPERCLIP_OPENCODE_PROVIDERS = JSON.stringify({
       [providerId]: {
