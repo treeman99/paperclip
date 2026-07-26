@@ -87,42 +87,86 @@ $env:DATABASE_URL = "postgres://사용자:비밀번호@서버주소:5432/papercl
 
 ## 4단계 — AI 연결하기
 
-둘 중 쓰실 것만 설정하시면 됩니다. 환경 변수는 **시스템 전체(Machine 범위)** 로 설정하세요.
+설정은 **파일 하나**로 끝냅니다. 환경 변수를 여러 개 넣을 필요가 없습니다.
 
-### 방법 A — 사내 오픈웨이트 모델
+`C:\PaperclipData\llm-lanes.json` 파일을 만들고 아래 내용을 넣으세요.
+(설치 위치를 바꾸셨다면 `config.json`이 있는 폴더에 두시면 됩니다.)
 
-```powershell
-# 사내 AI 서버 정보 (URL과 모델 이름만 바꾸세요). 반드시 한 줄입니다
-$env:PAPERCLIP_OPENCODE_PROVIDERS = '{"corp":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://사내주소/v1","apiKey":"{env:CORP_LLM_KEY}"},"models":{"모델이름":{}}}}'
+### 사내 오픈웨이트 모델만 쓰는 경우
 
-# 받으신 토큰
-$env:CORP_LLM_KEY = "받으신-토큰"
-
-# 아래 3줄은 빠뜨리면 동작하지 않습니다
-$env:PAPERCLIP_OPENCODE_SMALL_MODEL = "corp/모델이름"
-$env:PAPERCLIP_OPENCODE_CHEAP_MODEL = "corp/모델이름"
-$env:OPENCODE_ALLOW_ALL_MODELS = "true"
-
-# 화면에서 모델을 고를 수 있게 등록
-$env:PAPERCLIP_ADAPTER_MODELS = '{"opencode_local":[{"id":"corp/모델이름","label":"사내 모델"}]}'
+```json
+{
+  "inHouse": {
+    "baseUrl": "https://사내주소/v1",
+    "model": "모델이름",
+    "apiKeyEnv": "CORP_LLM_KEY"
+  }
+}
 ```
 
-에이전트를 만들 때 설정할 값:
+토큰은 파일에 직접 적지 않고 환경 변수 하나로만 넘깁니다.
 
-- 모델: `corp/모델이름` ← **반드시 `corp/` 로 시작해야 합니다**
+```powershell
+$env:CORP_LLM_KEY = "받으신-토큰"
+```
+
+> 토큰을 파일에 적어도 됩니다. 그럴 땐 `apiKeyEnv` 대신 `"apiKey": "받으신-토큰"` 을 쓰세요.
+> 다만 파일에 적으면 실행 기록에 토큰이 남을 수 있어 권장하지 않습니다.
+
+### AWS Bedrock의 Claude만 쓰는 경우
+
+```json
+{
+  "bedrock": {
+    "region": "ap-northeast-2"
+  }
+}
+```
+
+AWS 인증은 평소 쓰시는 방식(프로필, 역할, 액세스 키) 그대로 동작합니다.
+
+### 둘 다 쓰는 경우
+
+```json
+{
+  "inHouse": {
+    "baseUrl": "https://사내주소/v1",
+    "model": "모델이름",
+    "apiKeyEnv": "CORP_LLM_KEY"
+  },
+  "bedrock": {
+    "region": "ap-northeast-2"
+  }
+}
+```
+
+### 이 파일이 대신 해주는 일
+
+이 파일 하나를 넣으면 서버가 시작할 때 아래 설정들을 알아서 만들어 넣습니다.
+예전처럼 손으로 넣지 않으셔도 됩니다.
+
+| 자동으로 처리되는 것 | 왜 필요한지 |
+|---|---|
+| 사내 서버 접속 정보 | 어느 주소의 어떤 모델을 쓸지 |
+| 보조 모델 지정 | 지정하지 않으면 제목을 만들다가 작업이 중단됩니다 |
+| 모델 확인 절차 생략 | 사내 모델은 공개 목록에 없어서 확인에 실패합니다 |
+| 화면 모델 목록 등록 | 등록하지 않으면 화면에서 고를 수 없습니다 |
+| 사용 정보 외부 전송 차단 | 별도 조치가 필요 없어집니다 |
+
+이미 환경 변수를 넣어두셨다면 **그 값이 우선**입니다. 파일이 기존 설정을 덮어쓰지 않습니다.
+
+### 에이전트를 만들 때
+
+**사내 모델을 쓸 때:**
+
+- 모델: `corp/모델이름` — 반드시 `corp/` 로 시작합니다
 - `dangerouslySkipPermissions`: **켜기(true)**
 
 ⚠️ `dangerouslySkipPermissions`를 끄면 **아무 오류 메시지 없이** 사내 AI 설정이 통째로 무시됩니다. 반드시 켜두세요.
 
-### 방법 B — AWS Bedrock의 Claude
+**Bedrock을 쓸 때:**
 
-```powershell
-$env:CLAUDE_CODE_USE_BEDROCK = "1"
-$env:AWS_REGION = "ap-northeast-2"
-# AWS 인증은 평소 쓰시는 방식(프로필, 역할, 액세스 키) 그대로 됩니다
-```
-
-에이전트 모델에는 **Bedrock 전용 이름**을 넣어야 합니다.
+모델 이름에 Bedrock 전용 이름을 넣어야 합니다.
 
 - ✅ `us.anthropic.claude-sonnet-4-5-20250929-v2:0`
 - ❌ `sonnet`, `claude-haiku-4-5` — 이건 외부 서버로 나가기 때문에 거부됩니다
@@ -161,12 +205,8 @@ AI를 실제로 실행하는 건 별도 프로그램이라 앱 안에서 막는 
 
 `api.anthropic.com`, `api.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `api.x.ai`, `cursor.com`
 
-**2. 사용 정보 외부 전송을 꺼주세요.**
-
-```powershell
-$env:PAPERCLIP_TELEMETRY_DISABLED = "1"   # 반드시 "1" 입니다. "true"는 안 먹힙니다
-$env:DO_NOT_TRACK = "1"
-```
+**2. 사용 정보 외부 전송은 자동으로 차단됩니다.**
+4단계의 설정 파일을 넣으면 함께 처리됩니다. 끄고 싶지 않으시면 파일에 `"disableTelemetry": false` 를 넣으세요.
 
 **3. 아직 실제 Windows에서 검증되지 않은 부분이 있습니다.**
 Windows 관련 수정은 코드와 테스트로만 확인했습니다. 처음 설치하실 때 [Windows 검증 체크리스트](docs/deploy/windows-validation.md)를 한 번 돌려보시길 권합니다. 10분이면 됩니다.

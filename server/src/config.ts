@@ -1,4 +1,5 @@
 import { readConfigFile } from "./config-file.js";
+import { applyLlmLaneConfig } from "./adapters/llm-lane-config.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
@@ -109,6 +110,9 @@ function detectTailnetBindHost(): string | undefined {
 }
 
 export function loadConfig(): Config {
+  // 사내 LLM 레인 설정 파일을 환경 변수로 펼친다. 어댑터들이 process.env를
+  // 읽으므로, 설정을 읽는 어떤 코드보다 먼저 수행해야 한다.
+  applyLlmLaneConfig();
   const fileConfig = readConfigFile();
   const fileDatabaseMode =
     (fileConfig?.database.mode === "postgres" ? "postgres" : "embedded-postgres") as DatabaseMode;

@@ -1,90 +1,79 @@
 ---
-title: Windows Validation Checklist
-summary: Verify a Windows host before committing to a native install
+title: Windows 검증 체크리스트
+summary: 설치를 확정하기 전에 실제 Windows 머신에서 확인할 항목
 ---
 
-Run this on the actual Windows machine, as the account the service will run
-as. Phase 1 takes ten minutes and settles whether native Windows is viable at
-all — do not proceed past a blocking failure.
+실제로 설치할 Windows 머신에서, **서비스가 실행될 계정으로** 진행하세요.
+1단계는 10분이면 끝나며, 여기서 막히면 그 뒤는 볼 필요가 없습니다.
 
-Scope: the two supported LLM lanes ([On-Prem LLM Lanes](/deploy/on-prem-llm)) —
-Lane A `claude_local` on AWS Bedrock, Lane B `opencode_local` on an in-house
-OpenAI-compatible endpoint.
+대상은 [사내 LLM 연결 가이드](/deploy/on-prem-llm)의 두 레인입니다 —
+레인 A는 Bedrock의 Claude, 레인 B는 사내 오픈웨이트 모델.
 
-## Verdict
+## 결론
 
-Native Windows is the supported target for this deployment. Two defects that
-previously had no workaround have been fixed in this fork; the remaining
-constraints are configuration or documented limitations.
+네이티브 Windows가 이 배포판의 대상 환경입니다. 회피 방법이 없던 결함 두 가지는
+이 저장소에서 수정했고, 남은 제약은 설정으로 피하거나 감수할 수 있는 것들입니다.
 
-Command resolution was never the problem people expect: `resolveCommandPath`
-walks `PATHEXT` and re-routes `.cmd`/`.bat` through `cmd.exe`
-(`packages/adapter-utils/src/server-utils.ts:2236-2252`), so npm shims resolve
-correctly.
+흔히 걱정하는 npm 실행 파일 문제는 원래부터 문제가 아니었습니다.
+`resolveCommandPath`가 `PATHEXT`를 훑고 `.cmd`/`.bat`을 `cmd.exe`로 넘겨 처리합니다
+(`packages/adapter-utils/src/server-utils.ts:2236-2252`).
 
-**Fixed here:**
+**수정한 것:**
 
-- **Process-tree termination.** Windows has no process groups, so
-  `signalRunningProcess` could only reach the direct child — for a `.cmd`
-  wrapper, that is cmd.exe, leaving the real agent alive and holding file locks
-  while it kept billing Bedrock or the in-house endpoint. It now kills the tree
-  with `taskkill /T` (`/T /F` for SIGKILL). This also fixes the timeout hang:
-  the run promise resolves on `close`, which never fired while a surviving
-  grandchild held the stdout pipe.
-- **Quoting for space-bearing paths.** The cmd.exe wrapper pre-quotes its
-  command line, but spawned without `windowsVerbatimArguments` libuv re-escaped
-  those quotes and `cmd /s` mis-parsed the result. The flag is now set, so a
-  space in `PAPERCLIP_HOME` or the CLI path no longer breaks launches.
+- **프로세스 전체 종료.** Windows에는 프로세스 그룹이 없어서 작업을 취소하면 껍데기
+  프로세스만 죽고 실제 AI 프로그램은 살아남았습니다. 파일을 붙잡고 있으면서 Bedrock이나
+  사내 서버에 계속 요금을 발생시켰습니다. 이제 `taskkill /T`로 하위 프로세스까지
+  정리합니다. 이 수정으로 **시간 초과 시 작업이 영원히 멈추던 문제**도 함께 해결됩니다 —
+  살아남은 하위 프로세스가 출력 통로를 붙잡고 있으면 종료 신호가 오지 않았기 때문입니다.
+- **공백이 있는 경로.** 실행 명령을 만들 때 따옴표가 이중으로 처리되어, 경로에 공백이
+  하나라도 있으면 프로그램이 실행되지 않았습니다.
 
 <Note>
-Both fixes are covered by unit tests
-(`packages/adapter-utils/src/windows-process-tree.test.ts`) that simulate
-win32, but they have **not yet been exercised on a real Windows host**.
-Checks 1-3 and 1-4 below are what confirm them.
+두 수정 모두 Windows 환경을 흉내 낸 단위 테스트로 검증했습니다
+(`packages/adapter-utils/src/windows-process-tree.test.ts`).
+**실제 Windows 머신에서는 아직 확인되지 않았습니다.**
+아래 1-3, 1-4 항목이 이것을 실증하는 검사입니다.
 </Note>
 
-| | Native Windows | WSL2 | Docker Desktop |
+| | 네이티브 Windows | WSL2 | Docker Desktop |
 |---|---|---|---|
-| Both lanes run | Yes | Yes | Yes |
-| Cancel/timeout kills the whole tree | Yes (fixed — verify with 1-3) | Yes | Yes |
-| Egress sandbox (`networkScope`) | **Unavailable** | Yes | Yes |
-| `isolated_workspace` (git worktree) | Risky — MAX_PATH | Yes | Yes |
-| Workspace provision/job commands | Needs `sh` on PATH (ships with Git for Windows) | Yes | Yes |
-| Effort | ~1 day | 0.5 day | 1–2 days |
+| 두 레인 동작 | 가능 | 가능 | 가능 |
+| 취소·시간 초과 시 완전 종료 | 가능 (수정됨 — 1-3으로 확인) | 가능 | 가능 |
+| 앱 수준 네트워크 격리 | **불가** | 가능 | 가능 |
+| 격리 작업공간(git worktree) | 경로 길이 제한 위험 | 가능 | 가능 |
+| 작업공간 준비 명령 | `sh` 필요 (Git for Windows에 포함) | 가능 | 가능 |
+| 소요 | 약 1일 | 0.5일 | 1~2일 |
 
-**Remaining native-only limitations**, with no code fix:
+**코드로 고칠 수 없는 제약:**
 
-- **No application-level egress control.** Bubblewrap is Linux-only
-  (`packages/adapter-utils/src/local-process-sandbox.ts`), so `networkScope`
-  does not exist. The firewall is the only control — this matters most for
-  keeping internal data on the network.
-- **`isolated_workspace` / git worktrees risk MAX_PATH.** Use
-  `shared_workspace`.
-- **Workspace provision/cleanup/job commands and runtime services need a POSIX
-  shell** on `PATH`. Installing Git for Windows with Unix tools satisfies this;
-  a plain agent run does not need it at all.
+- **앱 수준에서 네트워크를 막을 수 없습니다.** 격리 도구가 Linux 전용이라
+  (`packages/adapter-utils/src/local-process-sandbox.ts`) `networkScope` 설정이 없습니다.
+  **방화벽이 유일한 통제 수단**이며, 내부 정보 유출 방지에 직결되는 부분입니다.
+- **격리 작업공간은 경로 길이 제한(260자) 위험이 있습니다.** 공유 작업공간을 쓰세요.
+- **작업공간 준비·정리 명령과 런타임 서비스는 POSIX 셸이 필요합니다.**
+  Git for Windows를 Unix tools 옵션과 함께 설치하면 해결됩니다.
+  일반적인 AI 작업 실행에는 필요 없습니다.
 
-## Recommended native configuration
+## 권장 설정
 
-| Setting | Value | Why |
+| 항목 | 값 | 이유 |
 |---|---|---|
-| CLI install | Either form works | The `.cmd` wrapper and its quoting are handled |
-| `PAPERCLIP_HOME` | `C:\pc` — short | Spaces are now safe; keep it short for MAX_PATH headroom |
-| Database | External PostgreSQL via `DATABASE_URL` | Sidesteps embedded-postgres failure modes |
-| Workspace mode | `shared_workspace` | Worktrees are what blow MAX_PATH |
-| `networkScope` / `filesystemScope` | **Unset** | Lane A fails at spawn with a misleading Bubblewrap error |
-| `timeoutSec` | Any value | Safe once check 1-4 passes |
-| Service account | Dedicated non-admin local account | Elevated tokens break embedded initdb |
-| Node | 22.12+, **x64** | No embedded PostgreSQL binary exists for win32 arm64 |
+| CLI 설치 형태 | 아무거나 | `.cmd` 처리와 따옴표 문제 모두 해결됨 |
+| `PAPERCLIP_HOME` | `C:\pc` — 짧게 | 공백은 이제 안전. 경로 길이 여유 확보용 |
+| 데이터베이스 | 외부 PostgreSQL (`DATABASE_URL`) | 내장 DB의 실패 사례를 모두 회피 |
+| 작업공간 방식 | 공유 작업공간 | 격리 방식이 경로 길이 제한을 유발 |
+| `networkScope` / `filesystemScope` | **설정하지 않음** | 레인 A에서 실행 자체가 실패합니다 |
+| `timeoutSec` | 아무 값 | 1-4를 통과하면 안전 |
+| 서비스 계정 | 관리자가 아닌 전용 계정 | 관리자 권한이면 내장 DB 초기화가 실패 |
+| Node | 22.12 이상, **x64** | win32 arm64용 내장 PostgreSQL이 없음 |
 
 <Warning>
-**Set the data directory ACL before onboarding.** `config.json` (external DB
-password), `.env` (agent JWT secret) and `secrets\master.key` — the key that
-decrypts your Bedrock credentials and in-house LLM token — are written with
-`mode: 0o600` (`cli/src/config/store.ts:114`, `cli/src/config/env.ts:108`,
-`server/src/secrets/local-encrypted-provider.ts:74`). **On Windows that is a
-no-op**, so those files inherit the parent directory's ACL. Never place the
-data root under `C:\ProgramData`, which grants `BUILTIN\Users` read.
+**설치를 시작하기 전에 데이터 폴더 권한을 잠그세요.** `config.json`(외부 DB 비밀번호),
+`.env`(에이전트 인증 키), `secrets\master.key`(**Bedrock 자격증명과 사내 토큰을 푸는 열쇠**)가
+`mode: 0o600`으로 저장되는데(`cli/src/config/store.ts:114`, `cli/src/config/env.ts:108`,
+`server/src/secrets/local-encrypted-provider.ts:74`), **Windows에서 이 설정은 아무 효과가
+없습니다.** 파일이 상위 폴더의 권한을 그대로 물려받으므로, `BUILTIN\Users`에 읽기 권한을
+주는 `C:\ProgramData` 아래에는 절대 두지 마세요.
 </Warning>
 
 ```powershell
@@ -94,11 +83,11 @@ icacls $Root /inheritance:r /grant:r "Administrators:(OI)(CI)F" /grant:r "$env:U
 icacls $Root
 ```
 
-## Phase 1 — ten-minute go/no-go
+## 1단계 — 10분 안에 가능 여부 판정
 
-All blocking.
+모두 필수 항목입니다.
 
-### 1-1 Paths and CLI form
+### 1-1 경로와 실행 파일 확인
 
 ```powershell
 $paths = @(
@@ -106,119 +95,96 @@ $paths = @(
   (Get-Command opencode -EA SilentlyContinue | Select-Object -First 1).Source
   (npm root -g), $env:USERPROFILE, $env:PAPERCLIP_HOME
 )
-foreach ($p in $paths) { if ($p) { if ($p -like '* *') { "SPACE!  $p" } else { "ok      $p" } } }
+foreach ($p in $paths) { if ($p) { "$p" } }
 node -p "process.version + ' ' + process.arch"
 ```
 
-**PASS:** both CLIs resolve; arch is `x64`.
+**통과 기준:** 두 CLI가 모두 찾아지고, 아키텍처가 `x64`.
 
-Spaces in these paths used to break launches and no longer do
-(`windowsVerbatimArguments` is now set), but a short `PAPERCLIP_HOME` still
-buys MAX_PATH headroom. **`arm64` is the blocker here:** there is no embedded
-PostgreSQL binary for win32 arm64 — use an external database.
+경로의 공백은 이제 문제가 되지 않습니다(따옴표 처리 수정됨). 다만 `PAPERCLIP_HOME`은
+경로 길이 여유를 위해 짧게 두는 편이 좋습니다. **`arm64`가 나오면** 내장 PostgreSQL을
+쓸 수 없으니 외부 데이터베이스를 사용하세요.
 
-### 1-2 A real agent run completes
+### 1-2 실제 작업 한 건 완료
 
-Create one agent per lane and give it a trivial task. This is the only check
-that exercises the whole chain.
+레인별로 에이전트를 하나씩 만들고 간단한 일을 시켜보세요.
+전체 과정을 실제로 검증하는 유일한 항목입니다.
 
-**PASS:** run reaches `succeeded`, and for Lane B the run's `commandNotes`
-contains both lines:
+**통과 기준:** 작업이 성공으로 끝나고, 레인 B는 실행 기록의 `commandNotes`에
+아래 두 줄이 모두 있을 것.
 
 ```
 Injected 1 custom OpenCode provider(s) from PAPERCLIP_OPENCODE_PROVIDERS: corp.
 Pinned OpenCode small_model to corp/my-coder-model.
 ```
 
-**If those two lines are missing,** provider injection was skipped — check that
-`dangerouslySkipPermissions` is `true`.
+**두 줄이 없다면** 사내 서버 설정이 적용되지 않은 것입니다.
+`dangerouslySkipPermissions`가 켜져 있는지 먼저 확인하세요.
 
-### 1-3 Cancel leaves no orphans — verifies the process-tree fix
+### 1-3 취소 후 남는 프로세스 없음 — 수정 사항 실증
 
-Start a long run, note the process tree, cancel it from the UI, then wait a few
-seconds and re-check:
+오래 걸리는 작업을 시작하고 화면에서 취소한 뒤, 몇 초 기다렸다가 확인하세요.
 
 ```powershell
 Get-CimInstance Win32_Process -Filter "Name='node.exe' OR Name='claude.exe' OR Name='opencode.exe' OR Name='cmd.exe'" |
   Select-Object ProcessId, ParentProcessId, CreationDate, CommandLine | Format-Table -Wrap
 ```
 
-**PASS:** no agent process from the cancelled run survives.
+**통과 기준:** 취소한 작업의 프로세스가 하나도 남아 있지 않을 것.
 
-**If processes survive:** the `taskkill /T` path did not fire. Confirm
-`taskkill.exe` is on the service account's `PATH`
-(`where.exe taskkill`) and that the account may terminate those processes.
-Until resolved you need a periodic cleanup runbook.
+**남아 있다면** 프로세스 정리가 동작하지 않은 것입니다. `where.exe taskkill`로
+`taskkill.exe`가 있는지, 그리고 해당 계정에 프로세스를 종료할 권한이 있는지 확인하세요.
+해결 전까지는 주기적으로 수동 정리가 필요합니다.
 
-### 1-4 Timeout does not hang — verifies the same fix
+### 1-4 시간 초과 시 멈추지 않음 — 같은 수정 사항 실증
 
-Set `timeoutSec` to a small value on a throwaway agent and start a run that
-exceeds it.
+임시 에이전트에 `timeoutSec`을 짧게 주고, 그보다 오래 걸리는 작업을 시켜보세요.
 
-**PASS:** the run transitions to timed-out within roughly `timeoutSec + graceSec`.
+**통과 기준:** `timeoutSec + graceSec` 정도 안에 시간 초과로 종료될 것.
 
-**If it hangs:** a grandchild still holds the stdout pipe, meaning the tree kill
-did not reach it. Fall back to `timeoutSec: 0` and report it — this is the case
-the fix is meant to cover.
+**멈춰 있다면** 하위 프로세스가 출력 통로를 붙잡고 있는 것이며, 프로세스 정리가
+거기까지 닿지 않은 것입니다. `timeoutSec: 0`으로 두고 알려주세요.
 
-## Phase 2 — configuration
+## 2단계 — 설정 확인
 
-### 2-1 Proxy does not capture loopback
+### 2-1 프록시가 내부 통신을 가로채지 않는지
 
-If a machine-scope proxy is set, the agent-to-Paperclip API call goes to
-`127.0.0.1` — the literal IP, not `localhost`.
+프록시가 설정되어 있다면, AI가 Paperclip에 보내는 요청이 `127.0.0.1`(이름이 아니라 숫자
+주소)로 나가므로 예외 처리가 필요합니다.
 
 ```powershell
 [Environment]::GetEnvironmentVariable('HTTP_PROXY','Machine')
 [Environment]::GetEnvironmentVariable('NO_PROXY','Machine')
 ```
 
-**PASS:** either no proxy, or `NO_PROXY` includes `127.0.0.1,localhost,::1`.
+**통과 기준:** 프록시가 없거나, `NO_PROXY`에 `127.0.0.1,localhost,::1`이 들어 있을 것.
 
-### 2-2 Corporate CA is trusted by Node
+### 2-2 사내 인증서 신뢰 설정
 
 ```powershell
 [Environment]::GetEnvironmentVariable('NODE_EXTRA_CA_CERTS','Machine')
 ```
 
-**PASS:** points at a readable PEM. **Node ignores `SSL_CERT_FILE`** — only
-`NODE_EXTRA_CA_CERTS` works. Windows programs that use the OS certificate store
-are unaffected, but Node is not one of them.
+**통과 기준:** 읽을 수 있는 인증서 파일을 가리킬 것.
+**`SSL_CERT_FILE`은 Node가 무시합니다** — `NODE_EXTRA_CA_CERTS`만 동작합니다.
+Windows 인증서 저장소를 쓰는 다른 프로그램은 영향받지 않지만 Node는 그렇지 않습니다.
 
-### 2-3 Lane B preflight is disabled
+### 2-3 격리 설정이 꺼져 있는지
 
-```powershell
-[Environment]::GetEnvironmentVariable('OPENCODE_ALLOW_ALL_MODELS','Machine')
-```
+에이전트 설정에 `networkScope`나 `filesystemScope`가 없는지 확인하세요.
+레인 A에서 이 값이 있으면 모든 작업이 실행 단계에서 실패하는데,
+오류 메시지에 Linux 전용이라는 설명이 없어 원인을 찾기 어렵습니다.
 
-**PASS:** `true`. Without it, every run performs a network model probe, and its
-failure message blames the model rather than the network.
+### 2-4 작업공간 방식
 
-### 2-4 Sandbox scopes are unset
+`executionWorkspacePolicy.defaultMode`가 공유 작업공간인지 확인하세요.
+`low_trust_review` 신뢰 설정을 쓰면 자동으로 격리 작업공간으로 바뀌므로
+(`server/src/services/heartbeat.ts:12104-12107`) 경로 길이 문제가 되살아납니다.
+네이티브 Windows에서는 이 설정을 피하세요.
 
-Confirm no agent has `networkScope` or `filesystemScope` in `adapterConfig`.
-On Lane A these make every run fail at spawn with a Bubblewrap error that does
-not mention Linux.
+## 3단계 — 레인별 확인
 
-### 2-5 Workspace mode
-
-Confirm `executionWorkspacePolicy.defaultMode` is `shared_workspace`. Note the
-`low_trust_review` trust preset silently upgrades an agent to
-`isolated_workspace` (`server/src/services/heartbeat.ts:12104-12107`), which
-re-introduces the worktree path-length risk — avoid that preset natively.
-
-If you must use worktrees, verify path headroom:
-
-```powershell
-git config --system core.longpaths
-```
-
-**PASS:** `true`, plus the registry `LongPathsEnabled` set. Even then, tooling
-that predates long-path support (some Node tooling included) still fails.
-
-## Phase 3 — lane specifics
-
-### Lane A — Bedrock
+### 레인 A — Bedrock
 
 ```powershell
 aws sts get-caller-identity
@@ -227,19 +193,18 @@ aws bedrock-runtime invoke-model --model-id us.anthropic.claude-sonnet-4-5-20250
   --cli-binary-format raw-in-base64-out out.json ; Get-Content out.json
 ```
 
-**PASS:** identity resolves and the model returns content. Firewall must allow
-`bedrock-runtime.<region>.amazonaws.com`. Confirm `CLAUDE_CODE_USE_BEDROCK=1`
-and `AWS_REGION` are set machine-scope, and that `ANTHROPIC_API_KEY` /
-`ANTHROPIC_BASE_URL` are **not** set.
+**통과 기준:** 계정 정보가 나오고 모델이 응답할 것.
+방화벽에서 `bedrock-runtime.<리전>.amazonaws.com`을 허용해야 합니다.
+`ANTHROPIC_API_KEY`와 `ANTHROPIC_BASE_URL`은 **설정되어 있지 않아야** 합니다.
 
-### Lane B — in-house endpoint
+### 레인 B — 사내 서버
 
 ```powershell
 $H = @{ Authorization = "Bearer $env:CORP_LLM_KEY" }
 Invoke-RestMethod -Uri "$env:LLM_BASE_URL/models" -Headers $H | ConvertTo-Json -Depth 3
 ```
 
-Then confirm tool calling, which decides whether coding agents work at all:
+이어서 **도구 호출**을 확인하세요. 코딩 AI가 동작하는지가 여기서 갈립니다.
 
 ```powershell
 $body = @{
@@ -253,32 +218,32 @@ $body = @{
   -ContentType 'application/json' -Body $body).choices[0].message.tool_calls
 ```
 
-**PASS:** `tool_calls` is non-empty. If empty, the serving stack has no
-tool-call parser enabled and no coding agent will function.
+**통과 기준:** `tool_calls`에 내용이 있을 것.
+비어 있다면 서버에 도구 호출 기능이 꺼져 있는 것이고, 그 경우 어떤 코딩 AI도 동작하지
+않습니다. 서버 담당자에게 문의하세요.
 
-## Reading the results
+## 결과 해석
 
-| Result | Meaning |
+| 결과 | 의미 |
 |---|---|
-| 1-1 fails on `arm64` | Use an external database |
-| 1-2 fails | Stop and debug; nothing downstream is meaningful |
-| **1-3 shows orphans** | The tree-kill fix did not fire. Check `taskkill` on PATH and account privileges; run a cleanup runbook until fixed |
-| **1-4 hangs** | Same root cause as 1-3. Fall back to `timeoutSec: 0` and report |
-| Phase 2 failures | All configuration — fix and re-run |
-| Lane B tool calling empty | Endpoint problem, not Paperclip. Escalate to whoever runs it |
+| 1-1에서 `arm64` | 외부 데이터베이스를 쓰세요 |
+| 1-2 실패 | 여기서 멈추세요. 이후 항목은 의미가 없습니다 |
+| **1-3에서 프로세스가 남음** | 프로세스 정리가 동작하지 않은 것. `taskkill` 존재 여부와 계정 권한 확인. 해결 전까지 수동 정리 필요 |
+| **1-4에서 멈춤** | 1-3과 같은 원인. `timeoutSec: 0`으로 두고 알려주세요 |
+| 2단계 실패 | 모두 설정 문제입니다. 고치고 다시 확인하세요 |
+| 레인 B 도구 호출 비어 있음 | Paperclip이 아니라 사내 서버 문제입니다 |
 
-## What this cannot settle
+## 이 체크리스트로 확인할 수 없는 것
 
-The repository has no Windows CI, so these remain open until observed on the
-box over real work:
+이 저장소에는 Windows 자동 검사가 없어서, 아래는 실제로 써보기 전에는 알 수 없습니다.
 
-- **Whether OpenCode honours `XDG_CONFIG_HOME` on Windows.** Lane B's provider
-  injection depends on it. Check 1-2's `commandNotes` proves the config was
-  written; it does not prove OpenCode read it. Confirm by watching the endpoint
-  receive the request.
-- **File-locking during worktree cleanup.** Windows cannot delete open files.
-  Only cancelling runs mid-build reveals this.
-- **CRLF noise in diffs.** Verify by having an agent make one small edit and
-  inspecting the resulting diff for whole-file changes.
-- **Long-run stability** — handle exhaustion, orphan accumulation over days.
-  Run a week of real work before committing.
+- **OpenCode가 Windows에서 설정 폴더 규약을 따르는지.** 레인 B의 설정 주입이 여기에
+  의존합니다. 1-2의 `commandNotes`는 설정 파일이 만들어졌다는 것만 증명하지,
+  OpenCode가 그걸 읽었다는 것까지 증명하지는 않습니다. 사내 서버에 요청이 실제로
+  도착하는지 확인하세요.
+- **작업공간 정리 중의 파일 잠금.** Windows는 열려 있는 파일을 지울 수 없습니다.
+  빌드 도중에 작업을 취소해봐야 드러납니다.
+- **줄바꿈 문자로 인한 불필요한 변경 표시.** AI에게 작은 수정을 시킨 뒤,
+  결과에 파일 전체가 바뀐 것처럼 나오는지 확인하세요.
+- **장시간 안정성** — 며칠에 걸친 자원 누수나 프로세스 누적.
+  일주일 정도 실제 업무로 돌려본 뒤 확정하세요.
