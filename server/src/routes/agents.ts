@@ -1737,6 +1737,13 @@ export function agentRoutes(
       return;
     }
     if (type === "opencode_local" && environment && environment.driver !== "local") {
+      // Operator-declared models still win here: the adapter's built-in list is
+      // vendor model ids, which an on-prem deployment cannot reach.
+      const declared = await listAdapterModels(type);
+      if (declared.length > 0) {
+        res.json(declared);
+        return;
+      }
       const adapter = requireServerAdapter(type);
       res.json(adapter.models ?? []);
       return;

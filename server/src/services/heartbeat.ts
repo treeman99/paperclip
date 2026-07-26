@@ -74,6 +74,11 @@ import { normalizeResponsibleUserDenialCode } from "./responsible-user-denial-ru
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, listAdapterModelProfiles, runningProcesses } from "../adapters/index.js";
 import { assertModelAllowed } from "../adapters/llm-policy.js";
+import {
+  classifyRunErrorCode,
+  CONTEXT_OVERFLOW_GUIDANCE,
+  isContextOverflowText,
+} from "../adapters/context-overflow.js";
 import type {
   AdapterExecutionResult,
   AdapterInvocationMeta,
@@ -5051,6 +5056,13 @@ export function buildPaperclipTaskMarkdown(input: {
     const fence = "`".repeat(longestBacktickRun + 1);
     return [fence + "text", value, fence].join("\n");
   };
+  // The wake-payload path caps these bodies; this markdown path did not, so a
+  // single long comment or description could blow the model's context window
+  // in one turn. Reuses the same limits so both paths agree.
+  const capTaskText = (value: string, maxChars: number, label: string) => {
+    if (value.length <= maxChars) return value;
+    return `${value.slice(0, maxChars)}\n[${label} truncated: omitted ${value.length - maxChars} chars]`;
+  };
   const issue = input.issue;
   const ancestors = (input.ancestors ?? []).slice(0, 6);
   const wakeComment = input.wakeComment ?? null;
@@ -5109,7 +5121,13 @@ export function buildPaperclipTaskMarkdown(input: {
     }
     const description = input.includeDescription === false ? "" : issue.description?.trim();
     if (description) {
-      lines.push("", "Issue description:", fenceTaskText(description));
+      lines.push(
+        "",
+        "Issue description:",
+        fenceTaskText(
+          capTaskText(description, MAX_INLINE_WAKE_ISSUE_DESCRIPTION_CHARS, "issue description"),
+        ),
+      );
     }
   }
   if (ancestors.length > 0) {
@@ -5126,7 +5144,13 @@ export function buildPaperclipTaskMarkdown(input: {
     }
   }
   if (wakeComment?.body.trim()) {
-    lines.push("", "Latest wake comment:", fenceTaskText(wakeComment.body.trim()));
+    lines.push(
+      "",
+      "Latest wake comment:",
+      fenceTaskText(
+        capTaskText(wakeComment.body.trim(), MAX_INLINE_WAKE_COMMENT_BODY_CHARS, "comment body"),
+      ),
+    );
   }
   lines.push("", "Use this task context as the current assignment.");
   return lines.join("\n");
@@ -13851,7 +13875,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           : outcome === "succeeded"
             ? null
             : redactCurrentUserText(
-                adapterResult.errorMessage ?? (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
+                isContextOverflowText(adapterResult.errorMessage)
+                  ? `${adapterResult.errorMessage}\n\n${CONTEXT_OVERFLOW_GUIDANCE}`
+                  : (adapterResult.errorMessage
+                    ?? (outcome === "timed_out" ? "Timed out" : "Adapter failed")),
                 currentUserRedactionOptions,
               );
       const recordedResponsibleUserDenialCode =
@@ -13862,7 +13889,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           : outcome === "cancelled"
             ? (latestRun?.errorCode ?? "cancelled")
             : outcome === "failed"
-              ? (adapterResult.errorCode ?? recordedResponsibleUserDenialCode ?? "adapter_failed")
+              ? (classifyRunErrorCode({
+                  errorCode: adapterResult.errorCode,
+                  errorMessage: adapterResult.errorMessage,
+                })
+                ?? recordedResponsibleUserDenialCode
+                ?? "adapter_failed")
               : null;
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;

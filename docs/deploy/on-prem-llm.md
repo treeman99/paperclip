@@ -218,3 +218,29 @@ control, and the following remain the operator's responsibility:
 - **Existing agent rows.** Agents created before this policy keep their stored
   `adapterType`. They will now fail at run time rather than silently using a
   vendor model, but auditing and migrating them is a manual step.
+
+## Context window overflow
+
+A self-hosted model's context window is usually far smaller than a vendor
+cloud model's, so "prompt too long" becomes routine rather than exotic.
+
+Runs that overflow now fail with the error code `context_overflow` and carry
+guidance in the run error, instead of surfacing as a generic `adapter_failed`.
+**They are deliberately not retried.** Overflow is deterministic — the same
+oversized prompt fails identically — so routing it into the bounded transient
+retry ladder (2m, 10m, 30m, 2h) would hammer the in-house endpoint for nearly
+three hours before failing anyway.
+
+The fix is a shorter prompt. In order of leverage:
+
+1. Trim the issue description and the triggering comment. Both are now capped
+   in the task markdown (12,000 and 4,000 characters), matching the caps the
+   wake-payload path already applied.
+2. Tighten the agent's `sessionCompaction` limits — `maxSessionRuns` and
+   `maxSessionAgeHours` are DB-derived and always fire. Do not rely on
+   `maxRawInputTokens`: it never triggers if the endpoint omits `usage`, so
+   enable `stream_options: {"include_usage": true}` on the serving stack.
+3. Reduce the skills attached to the agent. A single skill file can be 11k+
+   tokens.
+4. Serve the model with a larger `--max-model-len` (131072 minimum, 262144
+   recommended).

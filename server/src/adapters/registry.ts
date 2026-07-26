@@ -627,6 +627,14 @@ export async function listAdapterModels(type: string): Promise<{ id: string; lab
 }
 
 export async function refreshAdapterModels(type: string): Promise<{ id: string; label: string }[]> {
+  // Honour the operator's declared list here too. Without this, the UI's
+  // "Refresh models" button discards it and re-runs vendor CLI discovery,
+  // which on an air-gapped install replaces the in-house model with whatever
+  // the vendor fallback list contains.
+  const declaredModels = getDeclaredAdapterModels();
+  if (declaredModels && declaredModels[type]?.length) {
+    return declaredModels[type].map((m) => ({ id: m.id, label: m.label ?? m.id }));
+  }
   const adapter = findActiveServerAdapter(type);
   if (!adapter) return [];
   if (adapter.refreshModels) {
