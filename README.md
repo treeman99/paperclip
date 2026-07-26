@@ -1,3 +1,184 @@
+# 사내 배포 안내 (한국어)
+
+> 이 저장소는 Paperclip 원본을 사내용으로 수정한 버전입니다. 원본 소개는 아래 영문 README에 있습니다.
+> **처음 설치하신다면 이 섹션만 순서대로 따라 하시면 됩니다.**
+
+## Paperclip이 뭔가요?
+
+AI 에이전트(코딩 봇)를 **직원처럼 관리하는 웹 앱**입니다. 겉보기엔 할 일 관리 도구인데, 담당자가 사람이 아니라 AI입니다. 이슈를 만들어 배정하면 AI가 알아서 코드를 고치고 결과를 올립니다.
+
+**중요:** 채팅 앱이 아닙니다. AI가 **정해진 주기로 스스로 깨어나** 맡은 일을 합니다. 그래서 컴퓨터가 켜져 있어야 계속 일합니다.
+
+## 원본과 뭐가 다른가요?
+
+| 항목 | 내용 |
+|---|---|
+| **쓸 수 있는 AI가 2개로 제한됨** | ① AWS Bedrock의 Claude ② 사내 서버에 설치된 오픈웨이트 모델 |
+| **나머지는 전부 차단** | OpenAI, Gemini, Cursor 등은 설정해도 **실행 시점에 거부**됩니다. 실수로도 외부에 코드가 나가지 않게 하기 위함입니다 |
+| **Windows에서 제대로 동작하도록 수정** | 작업을 취소했을 때 프로세스가 살아남던 문제, 경로에 공백이 있으면 실행이 안 되던 문제를 고쳤습니다 |
+| **작은 모델에서도 안 죽게 수정** | 사내 모델은 한 번에 처리할 수 있는 글자 수가 적어서 긴 이슈를 만나면 그냥 실패했습니다. 이제 원인을 알려주고 입력을 알아서 줄입니다 |
+
+---
+
+## 1단계 — 어디에 설치할지 정하기
+
+두 가지 방법이 있고 **목적이 다릅니다.**
+
+|  | 공용 서버에 설치 | 내 PC에 설치 |
+|---|---|---|
+| 누가 쓰나 | 팀 전체가 브라우저로 접속 | 나 혼자 |
+| AI가 일하는 시간 | 24시간 | 내 PC가 켜져 있을 때만 |
+| 추천 용도 | **실제 업무** | 혼자 체험해보기 |
+
+**팀에서 쓸 거면 공용 서버에 설치하세요.** 개인 PC에 설치하면 퇴근하거나 절전 모드가 되는 순간 AI가 멈추고, AI가 코드를 빌드하고 테스트하느라 내 PC 자원을 계속 씁니다. 또 각자 설치하면 데이터가 따로 놀아서 서로의 작업이 안 보입니다.
+
+⚠️ 개인 PC에서 공용 서버로 옮기는 **자동 이사 기능이 없습니다.** 중요한 데이터가 쌓이기 전에 정하세요.
+
+---
+
+## 2단계 — 준비물 챙기기
+
+설치할 컴퓨터에서 PowerShell을 열고 하나씩 확인하세요.
+
+```powershell
+# 1) Node.js 22.12 이상, 그리고 x64인지 확인
+node -p "process.version + ' ' + process.arch"
+```
+
+`v22.12.0 x64` 이상이면 OK. **`arm64`가 나오면** 3단계에서 외부 데이터베이스를 반드시 써야 합니다.
+
+```powershell
+# 2) Git 설치 확인 (설치할 때 "Unix tools" 옵션을 켜주세요)
+git --version
+```
+
+```powershell
+# 3) 데이터를 저장할 폴더 만들기 + 권한 잠그기
+$Root = 'C:\PaperclipData'
+New-Item -ItemType Directory -Force -Path $Root | Out-Null
+icacls $Root /inheritance:r /grant:r "Administrators:(OI)(CI)F" /grant:r "$env:USERNAME:(OI)(CI)F"
+```
+
+🔴 **3번은 건너뛰지 마세요.** 이 폴더에 **AWS 접속 정보와 사내 AI 토큰을 푸는 열쇠 파일**이 저장됩니다. Windows에서는 프로그램이 파일 권한을 스스로 잠그지 못해서, 폴더 권한을 미리 잠가두지 않으면 그 PC의 다른 사용자가 열어볼 수 있습니다. 특히 `C:\ProgramData` 아래에는 **절대 두지 마세요.**
+
+그리고 미리 받아두셔야 할 정보:
+
+- **사내 AI 서버 주소와 토큰** (담당 부서에서 받으세요)
+- **AWS 계정 정보** (Bedrock을 쓸 경우)
+- **PostgreSQL 접속 정보** (권장 — 없으면 내장 DB를 쓰지만 권장하지 않습니다)
+
+---
+
+## 3단계 — 설치하기
+
+```powershell
+npx paperclipai onboard --yes --data-dir C:\PaperclipData
+```
+
+설치가 끝나면 접속 주소를 알려줍니다. 브라우저로 들어가시면 됩니다.
+
+**데이터베이스는 외부 PostgreSQL을 권장합니다.** 내장 DB는 관리자 권한으로 실행하면 실패하고, arm64에서는 아예 동작하지 않으며, 실패해도 원인을 제대로 알려주지 않습니다.
+
+```powershell
+$env:DATABASE_URL = "postgres://사용자:비밀번호@서버주소:5432/paperclip"
+```
+
+---
+
+## 4단계 — AI 연결하기
+
+둘 중 쓰실 것만 설정하시면 됩니다. 환경 변수는 **시스템 전체(Machine 범위)** 로 설정하세요.
+
+### 방법 A — 사내 오픈웨이트 모델
+
+```powershell
+# 사내 AI 서버 정보 (URL과 모델 이름만 바꾸세요). 반드시 한 줄입니다
+$env:PAPERCLIP_OPENCODE_PROVIDERS = '{"corp":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://사내주소/v1","apiKey":"{env:CORP_LLM_KEY}"},"models":{"모델이름":{}}}}'
+
+# 받으신 토큰
+$env:CORP_LLM_KEY = "받으신-토큰"
+
+# 아래 3줄은 빠뜨리면 동작하지 않습니다
+$env:PAPERCLIP_OPENCODE_SMALL_MODEL = "corp/모델이름"
+$env:PAPERCLIP_OPENCODE_CHEAP_MODEL = "corp/모델이름"
+$env:OPENCODE_ALLOW_ALL_MODELS = "true"
+
+# 화면에서 모델을 고를 수 있게 등록
+$env:PAPERCLIP_ADAPTER_MODELS = '{"opencode_local":[{"id":"corp/모델이름","label":"사내 모델"}]}'
+```
+
+에이전트를 만들 때 설정할 값:
+
+- 모델: `corp/모델이름` ← **반드시 `corp/` 로 시작해야 합니다**
+- `dangerouslySkipPermissions`: **켜기(true)**
+
+⚠️ `dangerouslySkipPermissions`를 끄면 **아무 오류 메시지 없이** 사내 AI 설정이 통째로 무시됩니다. 반드시 켜두세요.
+
+### 방법 B — AWS Bedrock의 Claude
+
+```powershell
+$env:CLAUDE_CODE_USE_BEDROCK = "1"
+$env:AWS_REGION = "ap-northeast-2"
+# AWS 인증은 평소 쓰시는 방식(프로필, 역할, 액세스 키) 그대로 됩니다
+```
+
+에이전트 모델에는 **Bedrock 전용 이름**을 넣어야 합니다.
+
+- ✅ `us.anthropic.claude-sonnet-4-5-20250929-v2:0`
+- ❌ `sonnet`, `claude-haiku-4-5` — 이건 외부 서버로 나가기 때문에 거부됩니다
+
+---
+
+## 5단계 — 잘 되는지 확인하기
+
+에이전트 하나를 만들고 간단한 일을 시켜보세요. 작업이 끝나면 **실행 기록(commandNotes)** 에 아래 두 줄이 있는지 확인하세요.
+
+```
+Injected 1 custom OpenCode provider(s) from PAPERCLIP_OPENCODE_PROVIDERS: corp.
+Pinned OpenCode small_model to corp/모델이름.
+```
+
+**이 두 줄이 없으면 사내 AI를 쓰지 않은 것입니다.** 이게 유일하게 확인 가능한 신호이니 꼭 보세요.
+
+---
+
+## 자주 겪는 문제
+
+| 증상 | 원인과 해결 |
+|---|---|
+| 작업이 실패하고 `context_overflow` 라고 나옴 | 이슈 내용이 너무 길어서 AI가 한 번에 못 읽습니다. 이슈 설명과 댓글을 줄이거나 에이전트에 붙인 스킬 수를 줄이세요. **다시 시도해도 똑같이 실패**하니 내용을 줄이는 게 유일한 해결입니다 |
+| 화면에 사내 모델이 안 보임 | "Refresh models" 버튼을 누르지 마세요. 그래도 안 보이면 `PAPERCLIP_ADAPTER_MODELS` 값에 오타가 없는지 보세요 (오타가 있으면 조용히 무시됩니다) |
+| 에이전트를 만들려는데 어댑터가 몇 개 없음 | 정상입니다. 허용된 2개 외에는 일부러 숨겨져 있습니다 |
+| 작업을 취소했는데 뭔가 계속 도는 것 같음 | 작업 관리자에서 `node.exe` / `opencode.exe` 를 확인하세요. 남아 있으면 알려주세요 (수정은 했지만 실제 Windows에서 아직 검증 전입니다) |
+| 예산을 설정했는데 작동을 안 함 | 알려진 제약입니다. 사내 모델은 가격표가 없어서 비용이 0원으로 기록되고 예산 제한이 걸리지 않습니다. 사용량은 AI 서버 쪽에서 따로 확인하셔야 합니다 |
+
+---
+
+## 꼭 알아두실 점
+
+**1. 외부 차단은 방화벽으로 하셔야 합니다.**
+AI를 실제로 실행하는 건 별도 프로그램이라 앱 안에서 막는 데 한계가 있습니다. 아래 주소들을 네트워크에서 막아주세요.
+
+`api.anthropic.com`, `api.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `api.x.ai`, `cursor.com`
+
+**2. 사용 정보 외부 전송을 꺼주세요.**
+
+```powershell
+$env:PAPERCLIP_TELEMETRY_DISABLED = "1"   # 반드시 "1" 입니다. "true"는 안 먹힙니다
+$env:DO_NOT_TRACK = "1"
+```
+
+**3. 아직 실제 Windows에서 검증되지 않은 부분이 있습니다.**
+Windows 관련 수정은 코드와 테스트로만 확인했습니다. 처음 설치하실 때 [Windows 검증 체크리스트](docs/deploy/windows-validation.md)를 한 번 돌려보시길 권합니다. 10분이면 됩니다.
+
+## 더 자세한 문서
+
+- [사내 AI 연결 상세 가이드](docs/deploy/on-prem-llm.md) — 설정값 전체와 동작 원리
+- [Windows 검증 체크리스트](docs/deploy/windows-validation.md) — 설치 전 확인 사항
+
+---
+---
+
 <p align="center">
   <img src="doc/assets/banner.jpg" alt="Paperclip is the app people use to manage AI agents for work." width="720" />
 </p>
