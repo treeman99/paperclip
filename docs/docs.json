@@ -87,6 +87,8 @@
               "deploy/database",
               "deploy/secrets",
               "deploy/storage",
+              "deploy/on-prem-llm",
+              "deploy/windows-validation",
               "deploy/environment-variables"
             ]
           }

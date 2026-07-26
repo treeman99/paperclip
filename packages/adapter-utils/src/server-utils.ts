@@ -57,6 +57,8 @@ interface SpawnTarget {
   cwd?: string;
   env?: Record<string, string | undefined>;
   cleanup?: () => Promise<void>;
+  /** Pass `args` to Windows verbatim, for targets that pre-quote their own command line. */
+  windowsVerbatimArguments?: boolean;
 }
 
 type RemoteExecutionSpec = SshRemoteExecutionSpec;
@@ -78,12 +80,49 @@ function resolveProcessGroupId(child: ChildProcess) {
   return typeof child.pid === "number" && child.pid > 0 ? child.pid : null;
 }
 
+/**
+ * Terminate a process and everything it spawned on Windows.
+ *
+ * Windows has no process groups, so `child.kill()` only reaches the direct
+ * child — which for a `.cmd` wrapper is cmd.exe, leaving the actual agent
+ * running. `taskkill /T` walks the tree by parent PID instead. This also
+ * unblocks the run: the promise resolves on the child's "close" event, which
+ * does not fire while a surviving grandchild still holds the stdout pipe.
+ *
+ * Returns false when the kill could not be dispatched, so the caller can fall
+ * back to signalling the direct child.
+ */
+function killWindowsProcessTree(pid: number, force: boolean): boolean {
+  // Without /F this asks politely (WM_CLOSE); console applications may ignore
+  // it, which is why callers escalate SIGTERM -> SIGKILL as they do on POSIX.
+  const args = force ? ["/PID", String(pid), "/T", "/F"] : ["/PID", String(pid), "/T"];
+  try {
+    const killer = spawn("taskkill", args, { stdio: "ignore", windowsHide: true });
+    // A failed taskkill usually means the tree is already gone; either way we
+    // must not let the error surface as an unhandled 'error' event.
+    killer.on("error", () => {});
+    killer.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Exported so the direct-child fallback branch can be unit-tested directly.
 export function signalRunningProcess(
   running: Pick<RunningProcess, "child" | "processGroupId">,
   signal: NodeJS.Signals,
 ) {
-  if (process.platform !== "win32" && running.processGroupId && running.processGroupId > 0) {
+  const childIsLive = running.child.exitCode === null && running.child.signalCode === null;
+  if (process.platform === "win32") {
+    const pid = running.child.pid;
+    if (childIsLive && typeof pid === "number" && pid > 0) {
+      if (killWindowsProcessTree(pid, signal === "SIGKILL")) return;
+    }
+    if (childIsLive) running.child.kill(signal);
+    return;
+  }
+  if (running.processGroupId && running.processGroupId > 0) {
     try {
       process.kill(-running.processGroupId, signal);
       return;
@@ -2355,6 +2394,10 @@ async function resolveSpawnTarget(
     return {
       command: shell,
       args: ["/d", "/s", "/c", commandLine],
+      // `commandLine` is already quoted for cmd.exe. Without this flag libuv
+      // re-escapes those quotes when building the Win32 command line and
+      // `cmd /s` mis-parses it, so any path containing a space fails to launch.
+      windowsVerbatimArguments: true,
     };
   }
 
@@ -3202,6 +3245,7 @@ export async function runChildProcess(
           env: childEnv,
           detached: process.platform !== "win32",
           shell: false,
+          windowsVerbatimArguments: target.windowsVerbatimArguments ?? false,
           stdio: [opts.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
         }) as ChildProcessWithEvents;
         const startedAt = new Date().toISOString();

@@ -9,6 +9,7 @@ import type { UIAdapterModule } from "./types";
 import { listUIAdapters } from "./registry";
 import { isAdapterTypeHidden } from "./disabled-store";
 import { getAdapterLabel, getAdapterDisplay } from "./adapter-display-registry";
+import { isAdapterTypeAllowedByPolicy } from "./llm-policy";
 
 export interface AdapterOptionMetadata {
   value: string;
@@ -27,6 +28,8 @@ export function listKnownAdapterTypes(): string[] {
  * Unknown types (external adapters) are always considered enabled.
  */
 export function isEnabledAdapterType(type: string): boolean {
+  // This deployment supports two LLM lanes only; the server refuses the rest.
+  if (!isAdapterTypeAllowedByPolicy(type)) return false;
   // Check display registry first — built-in adapters like process/http are
   // intentionally withheld even though they're registered as UI adapters.
   if (getAdapterDisplay(type).comingSoon) return false;
@@ -40,6 +43,7 @@ export function isEnabledAdapterType(type: string): boolean {
  * any non-"coming soon" adapter from the display registry.
  */
 export function isValidAdapterType(type: string): boolean {
+  if (!isAdapterTypeAllowedByPolicy(type)) return false;
   if (getAdapterDisplay(type).comingSoon) return false;
   return true;
 }

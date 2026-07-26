@@ -73,6 +73,7 @@ import { publishLiveEvent } from "./live-events.js";
 import { normalizeResponsibleUserDenialCode } from "./responsible-user-denial-run-outcomes.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, listAdapterModelProfiles, runningProcesses } from "../adapters/index.js";
+import { assertModelAllowed } from "../adapters/llm-policy.js";
 import type {
   AdapterExecutionResult,
   AdapterInvocationMeta,
@@ -13693,6 +13694,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (managedMcpConfig) {
           adapterContext.paperclipManagedMcp = managedMcpConfig;
         }
+        // Last gate before the model is contacted. Model profiles, imports and
+        // routine overrides can all rewrite `runtimeConfig.model` after the
+        // route-level check, so the policy is re-asserted against the value
+        // actually being executed.
+        assertModelAllowed(agent.adapterType, runtimeConfig.model);
         adapterResult = await adapter.execute({
           runId: run.id,
           agent,

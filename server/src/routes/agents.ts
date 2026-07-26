@@ -80,6 +80,11 @@ import {
   refreshAdapterModels,
   requireServerAdapter,
 } from "../adapters/index.js";
+import {
+  checkModelForAdapter,
+  describeLlmPolicy,
+  isAdapterTypeAllowed,
+} from "../adapters/llm-policy.js";
 import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
@@ -944,6 +949,11 @@ export function agentRoutes(
     if (!findServerAdapter(adapterType)) {
       throw unprocessable(`Unknown adapter type: ${adapterType}`);
     }
+    if (!isAdapterTypeAllowed(adapterType)) {
+      throw unprocessable(
+        `Adapter type "${adapterType}" is not permitted. ${describeLlmPolicy()}.`,
+      );
+    }
     return adapterType;
   }
 
@@ -1305,6 +1315,12 @@ export function agentRoutes(
     adapterType: string | null | undefined,
     adapterConfig: Record<string, unknown>,
   ) {
+    if (typeof adapterType === "string") {
+      const modelCheck = checkModelForAdapter(adapterType, adapterConfig.model);
+      if (!modelCheck.ok) {
+        throw unprocessable(`Invalid ${adapterType} adapterConfig: ${modelCheck.reason}`);
+      }
+    }
     if (adapterType !== "opencode_local") return;
     try {
       requireOpenCodeModelId(adapterConfig.model);

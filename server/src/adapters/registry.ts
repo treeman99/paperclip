@@ -4,6 +4,7 @@ import type {
   ServerAdapterModule,
 } from "./types.js";
 import { parseAdapterModelsEnv } from "../services/adapter-models-env.js";
+import { assertAdapterTypeAllowed } from "./llm-policy.js";
 import { stampClaudeAgentIdHeader } from "./claude-agent-id-header.js";
 import {
   buildSandboxNpmInstallCommand,
@@ -574,6 +575,9 @@ export function requireServerAdapter(type: string): ServerAdapterModule {
 }
 
 export function getServerAdapter(type: string): ServerAdapterModule {
+  // Throw rather than fall through: the `processAdapter` fallback below runs
+  // arbitrary commands, so a policy-blocked type must never reach it.
+  assertAdapterTypeAllowed(type);
   return findActiveServerAdapter(type) ?? processAdapter;
 }
 
