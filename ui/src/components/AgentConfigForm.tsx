@@ -56,6 +56,12 @@ import { AgentSecretAccessEditor } from "./AgentSecretAccessEditor";
 import { AGENT_ACCESS_CONFIG_PATH_PREFIX } from "../lib/secret-delivery";
 import { shouldShowLegacyWorkingDirectoryField } from "../lib/legacy-agent-config";
 import { listAdapterOptions, listVisibleAdapterTypes } from "../adapters/metadata";
+import { AgentLaneField, type AgentLaneSelection } from "./AgentLaneField";
+import {
+  isAgentAdapterPickerHidden,
+  isAgentExecutionDetailHidden,
+  isAgentRunPolicyHidden,
+} from "../lib/onprem-ui";
 import { getAdapterDisplay, getAdapterLabel } from "../adapters/adapter-display-registry";
 import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
 import { buildAgentUpdatePatch, omitUndefinedEntries, type AgentConfigOverlay } from "../lib/agent-config-patch";
@@ -209,7 +215,13 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const showInlineAdapterTestEnvironmentButton =
     showAdapterTestEnvironmentButton && !props.onTestActionChange;
   const showInlineAdapterTestEnvironmentFeedback = !props.onTestFeedbackChange;
-  const showCreateRunPolicySection = props.showCreateRunPolicySection ?? true;
+  // 사내 배포본에서는 LLM 접속과 무관한 설정을 화면에서 뺀다. 서버가 이미
+  // 거부하거나 설치본 전체에 고정된 값이라, 남겨 두면 고칠 수 있는 것처럼 보인다.
+  const hideExecutionDetail = isAgentExecutionDetailHidden();
+  const hideRunPolicy = isAgentRunPolicyHidden();
+  const useLanePicker = isAgentAdapterPickerHidden();
+  const showCreateRunPolicySection =
+    (props.showCreateRunPolicySection ?? true) && !hideRunPolicy;
   const hideInstructionsFile = props.hideInstructionsFile ?? false;
   const { selectedCompanyId } = useCompany();
   const queryClient = useQueryClient();
@@ -411,6 +423,34 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const set = isCreate
     ? (patch: Partial<CreateConfigValues>) => props.onChange(patch)
     : null;
+  // ---- LLM 레인 ----
+  // 에이전트가 고른 레인 이름. 어댑터 종류와 모델은 여기서 파생되므로, 이 값을
+  // 바꾸면 셋을 한꺼번에 갱신한다.
+  const currentLaneName = isCreate
+    ? (val!.llmLane ?? "")
+    : eff("adapterConfig", "llmLane", typeof config.llmLane === "string" ? config.llmLane : "");
+  function applyLaneSelection(selection: AgentLaneSelection) {
+    if (isCreate) {
+      set!({
+        llmLane: selection.laneName,
+        adapterType: selection.adapterType,
+        model: selection.model ?? "",
+      });
+      return;
+    }
+    setOverlay((prev) => ({
+      ...prev,
+      adapterType: selection.adapterType,
+      adapterConfig: {
+        ...prev.adapterConfig,
+        llmLane: selection.laneName,
+        // Bedrock 레인은 모델을 비워 둘 수 있다. 그때는 저장된 값을 지우지 않는다 —
+        // 빈 값으로 덮으면 이전에 고른 모델이 이유 없이 사라진다.
+        ...(selection.model ? { model: selection.model } : {}),
+      },
+    }));
+  }
+
   const rawCurrentDefaultEnvironmentId = isCreate
     ? val!.defaultEnvironmentId ?? ""
     : eff("identity", "defaultEnvironmentId", props.agent.defaultEnvironmentId ?? "");
@@ -1054,7 +1094,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
             </Field>
           </div>
         </div>
-      ) : showEnvironmentOverrideControl ? (
+      ) : showEnvironmentOverrideControl && !hideExecutionDetail ? (
         <div className={cn(!cards && (isCreate ? "border-t border-border" : "border-b border-border"))}>
           {cards
             ? <h3 className="text-sm font-medium mb-3">Environment</h3>
@@ -1109,7 +1149,20 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
           )}
         </div>
         <div className={cn(cards ? "border border-border rounded-lg p-4 space-y-3" : "px-4 pb-3 space-y-3")}>
-          {showAdapterTypeField && (
+          {/* showAdapterTypeField를 끈 화면(가져오기 등)은 LLM 선택 자체를 맡기지
+              않겠다는 뜻이므로, 레인 선택기도 같이 감춘다. */}
+          {useLanePicker && showAdapterTypeField ? (
+            <Field
+              label="LLM"
+              hint="설정 > LLM 연결에 등록한 접속 정보 중 하나를 고릅니다. 어댑터와 모델은 여기서 정해집니다."
+            >
+              <AgentLaneField
+                value={currentLaneName || null}
+                onChange={applyLaneSelection}
+                autoSelectDefault={isCreate}
+              />
+            </Field>
+          ) : showAdapterTypeField && (
             <Field label="Adapter type" hint={help.adapterType}>
               <AdapterTypeDropdown
                 value={adapterType}
@@ -1178,7 +1231,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
           )}
 
           {/* Working directory */}
-          {showLegacyWorkingDirectoryField && (
+          {showLegacyWorkingDirectoryField && !hideExecutionDetail && (
             <Field label="Working directory (deprecated)" hint={help.cwd}>
               <div className="flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5">
                 <FolderOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -1210,7 +1263,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       </div>
 
       {/* ---- Permissions & Configuration ---- */}
-      {isLocal && (
+      {/* 실행 명령·모델·환경 변수·시크릿·타임아웃이 모두 이 블록에 있다. 사내
+          배포본에서는 전부 레인이나 설치본 설정에서 결정되므로 통째로 감춘다. */}
+      {isLocal && !hideExecutionDetail && (
         <div className={cn(!cards && "border-b border-border")}>
           {cards
             ? <h3 className="text-sm font-medium mb-3">Permissions &amp; Configuration</h3>
@@ -1451,7 +1506,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       )}
 
       {/* ---- Run Policy ---- */}
-      {isCreate && showCreateRunPolicySection ? (
+      {hideRunPolicy ? null : isCreate && showCreateRunPolicySection ? (
         <div className={cn(!cards && "border-b border-border")}>
           {cards
             ? <h3 className="text-sm font-medium flex items-center gap-2 mb-3"><Heart className="h-3 w-3" /> Run Policy</h3>

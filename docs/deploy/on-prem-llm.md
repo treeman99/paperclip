@@ -28,39 +28,93 @@ summary: AWS Bedrock의 Claude와 사내 오픈웨이트 모델, 두 가지만 �
 직접 API용 이름을 넣은 경우(외부로 나갑니다), 그리고 `opencode_local` 에이전트의 모델이
 사내 게이트웨이를 가리키지 않는 경우.
 
-## 설정 파일 (권장)
+## 화면에서 설정하기 (권장)
 
-환경 변수를 여러 개 넣는 대신 **JSON 파일 하나**로 설정할 수 있습니다.
+**설정 → 인스턴스 설정 → LLM 연결**에서 전부 할 수 있습니다. 이 화면이 아래에서
+설명하는 `llm-lanes.json`을 직접 읽고 씁니다. 파일을 손으로 고쳐도 되고, 화면에서
+고쳐도 됩니다 — 같은 파일입니다.
+
+화면에서 하는 일은 세 가지입니다.
+
+1. **AWS SSO 프로필 저장과 로그인.** 프로필 이름과 기본 리전을 저장한 뒤 `SSO 로그인`을
+   누르면 서버가 `aws sso login`을 실행하고, AWS CLI가 출력하는 인증 주소와 코드를
+   화면에 띄웁니다. 브라우저가 자동으로 열리지 않는 PC에서도 그 주소로 들어가면 됩니다.
+   현재 세션이 살아 있는지는 `sts get-caller-identity`로 실제 확인합니다.
+2. **레인 등록.** Bedrock 레인은 리전과 모델 id를, 사내 모델 레인은 서버 주소·토큰·모델
+   이름을 넣습니다. `연결 확인`을 누르면 저장 전에 실제로 붙어 보고, 사내 서버가
+   `/v1/models`를 지원하면 **현재 서빙 중인 모델 목록**을 가져와 골라 넣을 수 있습니다.
+3. **기본 레인 지정.** 레인을 고르지 않은 에이전트는 기본 레인으로 실행됩니다.
+
+<Note>
+AWS CLI v2가 설치되어 있어야 로그인 버튼이 동작합니다. 프로필이 이 PC에 아직 없으면
+화면이 `aws configure sso --profile <이름>` 을 안내합니다. Paperclip은 `~/.aws/config`를
+직접 고치지 않습니다 — 다른 작업에 쓰는 AWS 설정을 건드리지 않기 위해서입니다.
+</Note>
+
+<Warning>
+**화면 없는 서버(우분투 systemd 배포)에는 Bedrock 레인을 만들지 마세요.** SSO 로그인
+승인은 사람이 브라우저에서 눌러야 하고 세션이 몇 시간마다 만료됩니다. 서버에 붙이면
+아무도 보지 않는 시간에 세션이 끊겨 작업이 멈춥니다. 팀 공용 서버는 사내 모델 레인만
+쓰는 구성이 안전합니다. 설치 절차는 [사내 배포 안내](https://github.com/treeman99/paperclip#readme)의
+경로 B를 보세요.
+</Warning>
+
+## 설정 파일
+
 위치는 `config.json`과 같은 폴더의 `llm-lanes.json`이며,
 `PAPERCLIP_LLM_CONFIG_FILE`로 경로를 바꿀 수 있습니다.
 
+접속 정보 한 벌을 **레인**이라 부르고 이름을 붙입니다. 에이전트는 레인 이름 하나만
+고르므로, 같은 게이트웨이를 여러 에이전트가 써도 토큰이 복제되지 않고 모델이 바뀌면
+여기 한 곳만 고치면 됩니다.
+
 ```json
 {
-  "inHouse": {
-    "baseUrl": "https://llm.corp.internal/v1",
-    "model": "my-coder-model",
-    "apiKey": "받으신-토큰",
-    "providerId": "corp",
-    "label": "사내 모델"
+  "lanes": {
+    "사내GPU-A": {
+      "kind": "inhouse",
+      "baseUrl": "https://llm.corp.internal/v1",
+      "model": "my-coder-model",
+      "apiKey": "받으신-토큰",
+      "providerId": "corp",
+      "label": "사내 모델"
+    },
+    "Bedrock 사내": {
+      "kind": "bedrock",
+      "region": "ap-northeast-2",
+      "model": "us.anthropic.claude-sonnet-4-5-20250929-v2:0"
+    }
   },
-  "bedrock": {
-    "region": "ap-northeast-2"
-  },
+  "defaultLane": "사내GPU-A",
+  "awsSso": { "profile": "corp-sso", "region": "ap-northeast-2" },
   "disableTelemetry": true
 }
 ```
 
 | 항목 | 필수 | 설명 |
 |------|------|------|
-| `inHouse.baseUrl` | ✅ | 사내 서버 주소. 끝의 `/v1`까지 포함합니다 |
-| `inHouse.model` | ✅ | 모델 이름. 앞에 provider를 붙이지 않은 순수 이름 |
-| `inHouse.apiKey` | 둘 중 하나 | 토큰을 파일에 직접 적는 경우 |
-| `inHouse.apiKeyEnv` | 둘 중 하나 | 토큰을 환경 변수로 넘길 때 그 **변수 이름** |
-| `inHouse.providerId` | | 모델 앞에 붙는 이름. 기본값 `corp` |
-| `inHouse.label` | | 화면에 표시할 이름 |
-| `inHouse.npm` | | OpenAI 호환이 아닐 때만 변경. 기본값 `@ai-sdk/openai-compatible` |
-| `bedrock.region` | ✅ | Bedrock을 쓸 경우의 리전 |
+| `lanes.<이름>.kind` | ✅ | `inhouse` 또는 `bedrock` |
+| `lanes.<이름>.baseUrl` | inhouse ✅ | 사내 서버 주소. 끝의 `/v1`까지 포함합니다 |
+| `lanes.<이름>.model` | inhouse ✅ | 모델 이름. 앞에 provider를 붙이지 않은 순수 이름 |
+| `lanes.<이름>.apiKey` | inhouse, 둘 중 하나 | 토큰을 파일에 직접 적는 경우 |
+| `lanes.<이름>.apiKeyEnv` | inhouse, 둘 중 하나 | 토큰을 환경 변수로 넘길 때 그 **변수 이름** |
+| `lanes.<이름>.providerId` | | 모델 앞에 붙는 이름. 기본값 `corp`. **사내 레인마다 달라야 합니다** |
+| `lanes.<이름>.region` | | Bedrock 리전. 비우면 `awsSso.region` |
+| `lanes.<이름>.label` | | 화면에 표시할 이름 |
+| `lanes.<이름>.npm` | | OpenAI 호환이 아닐 때만 변경. 기본값 `@ai-sdk/openai-compatible` |
+| `defaultLane` | | 레인을 고르지 않은 에이전트가 쓸 레인 |
+| `awsSso.profile` | Bedrock 쓰면 ✅ | `aws sso login`에 넘길 프로필 이름 |
+| `awsSso.region` | | 레인이 리전을 비웠을 때의 기본값 |
 | `disableTelemetry` | | 기본값 `true` |
+
+사내 레인이 여러 개면 `providerId`가 서로 달라야 합니다. 같으면 나중 레인의 토큰이 앞
+레인을 덮어써 조용히 엉뚱한 게이트웨이로 붙기 때문에, 저장 시점에 거부합니다.
+
+<Note>
+이전 형식(`inHouse`/`bedrock`을 최상위에 둔 파일)도 그대로 읽습니다. 각각 `사내 모델`,
+`Bedrock Claude`라는 이름의 레인으로 환산되며, 화면에서 무엇이든 저장하는 순간
+`lanes` 형식으로 옮겨집니다.
+</Note>
 
 토큰을 `apiKey`로 파일에 직접 적어도 평문이 새어 나가지 않습니다. 값을 전용 변수로
 옮기고 생성되는 설정에는 참조만 남기며, 그 변수 이름에 `PAPERCLIP_` 접두사를 써서
@@ -102,25 +156,33 @@ summary: AWS Bedrock의 Claude와 사내 오픈웨이트 모델, 두 가지만 �
 
 ## 에이전트 설정
 
-**레인 A (Bedrock)**
+에이전트 화면에서 고르는 것은 **LLM 레인 이름 하나**뿐입니다. 어댑터 종류와 모델 id는
+레인에서 파생되므로 따로 고를 수 없습니다 — 따로 고르게 두면 레인과 어긋난 조합이
+만들어지고, 서버가 저장을 거부합니다.
+
+저장되는 값은 이렇게 생겼습니다.
 
 ```jsonc
+// 레인 A (Bedrock)
 {
+  "llmLane": "Bedrock 사내",
   "model": "us.anthropic.claude-sonnet-4-5-20250929-v2:0"
 }
-```
 
-Bedrock 환경이 감지되면 어댑터가 Bedrock 전용 모델 목록을 제공하고,
-비용 청구처를 `anthropic`이 아닌 `aws_bedrock`으로 기록합니다.
-
-**레인 B (사내 모델)**
-
-```jsonc
+// 레인 B (사내 모델)
 {
+  "llmLane": "사내GPU-A",
   "model": "corp/my-coder-model",
   "dangerouslySkipPermissions": true
 }
 ```
+
+`model`은 저장돼 있지만 **실행 직전에 레인의 현재 값으로 다시 덮어씁니다.** 사내 모델은
+그때그때 바뀌므로, 설정 화면에서 모델을 바꾸면 에이전트를 하나씩 다시 저장하지 않아도
+다음 실행부터 반영됩니다. Bedrock 레인은 리전과 SSO 프로필도 실행 단위로 맞춥니다.
+
+Bedrock 환경이 감지되면 어댑터가 Bedrock 전용 모델 목록을 제공하고,
+비용 청구처를 `anthropic`이 아닌 `aws_bedrock`으로 기록합니다.
 
 <Warning>
 `dangerouslySkipPermissions`를 `false`로 두면 어댑터가 사내 서버 설정 주입을

@@ -514,6 +514,15 @@ export interface CLIAdapterModule {
 
 export interface CreateConfigValues {
   adapterType: string;
+  /**
+   * Name of the operator-defined LLM lane this agent runs on.
+   *
+   * On-prem deployments register connection details (Bedrock region / in-house
+   * gateway URL + token) as named lanes; the agent picks a name and the server
+   * derives adapter type, model, and credentials from it. Empty on deployments
+   * that expose the full adapter picker instead.
+   */
+  llmLane?: string;
   cwd: string;
   instructionsFilePath?: string;
   promptTemplate: string;

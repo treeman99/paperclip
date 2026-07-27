@@ -26,6 +26,7 @@ import { listUIAdapters } from "../adapters";
 import { isVisualAdapterChoice } from "../adapters/metadata";
 import { getAdapterDisplay } from "../adapters/adapter-display-registry";
 import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
+import { isAgentAdapterPickerHidden } from "../lib/onprem-ui";
 import { useToast } from "../context/ToastContext";
 import { Badge } from "@/components/ui/badge";
 
@@ -126,6 +127,14 @@ export function NewAgentDialog() {
   }
 
   function handleAdvancedConfig() {
+    // 런타임 고르기 화면은 어댑터를 직접 선택하게 하는데, 사내 배포본에서는
+    // 어댑터가 LLM 레인에서 파생된다. 한 단계 건너뛰고 바로 생성 화면으로 보낸다.
+    if (isAgentAdapterPickerHidden()) {
+      closeNewAgent();
+      resetDialogState();
+      navigate("/agents/new");
+      return;
+    }
     setMode("runtime");
   }
 

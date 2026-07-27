@@ -29,6 +29,7 @@ import { defaultCreateValues } from "../components/agent-config-defaults";
 import { getUIAdapter, listUIAdapters } from "../adapters";
 import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
 import { isValidAdapterType } from "../adapters/metadata";
+import { isAgentAdapterPickerHidden } from "../lib/onprem-ui";
 import { ReportsToPicker } from "../components/ReportsToPicker";
 import { buildNewAgentHirePayload } from "../lib/new-agent-hire-payload";
 import { TrustPresetSection } from "../components/TrustPresetSection";
@@ -155,12 +156,22 @@ export function NewAgent() {
 
   function buildAdapterConfig() {
     const adapter = getUIAdapter(configValues.adapterType);
-    return adapter.buildAdapterConfig(configValues);
+    const built = adapter.buildAdapterConfig(configValues);
+    // 레인 이름은 어댑터별 빌더가 모르는 값이라 여기서 얹는다. 서버는 이걸 보고
+    // 실행 시점에 접속 정보와 모델을 다시 해석한다.
+    if (!configValues.llmLane) return built;
+    return { ...built, llmLane: configValues.llmLane };
   }
 
   function handleSubmit() {
     if (!selectedCompanyId || !name.trim()) return;
     setFormError(null);
+    // 레인을 쓰는 배포본에서는 레인이 곧 LLM 선택이다. 안 고르고 저장하면 서버가
+    // 어댑터 정책으로 거부하는데, 그 메시지는 무엇을 안 골랐는지 알려주지 않는다.
+    if (isAgentAdapterPickerHidden() && !configValues.llmLane) {
+      setFormError("LLM을 골라 주세요. 설정 > LLM 연결에서 등록한 레인 중 하나가 필요합니다.");
+      return;
+    }
     if (configValues.adapterType === "opencode_local") {
       if (!isValidOpenCodeModelId(configValues.model)) {
         setFormError("OpenCode requires an explicit model in provider/model format.");

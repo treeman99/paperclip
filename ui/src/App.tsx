@@ -77,6 +77,7 @@ import { ProfileSettings } from "./pages/ProfileSettings";
 import { PluginManager } from "./pages/PluginManager";
 import { PluginSettings } from "./pages/PluginSettings";
 import { AdapterManager } from "./pages/AdapterManager";
+import { LlmLanes } from "./pages/LlmLanes";
 import { PluginPage } from "./pages/PluginPage";
 import { OrgChart } from "./pages/OrgChart";
 import { NewAgent } from "./pages/NewAgent";
@@ -150,6 +151,7 @@ function boardRoutes() {
       <Route path="company/settings/instance/experimental" element={<InstanceExperimentalSettings />} />
       <Route path="company/settings/instance/plugins" element={<PluginManager />} />
       <Route path="company/settings/instance/plugins/:pluginId" element={<PluginSettings />} />
+      <Route path="company/settings/instance/llm" element={<LlmLanes />} />
       <Route path="company/settings/instance/adapters" element={<AdapterManager />} />
       <Route path="company/settings/:settingsRoutePath/*" element={<CompanySettingsPluginPage />} />
       <Route path="skills/studio" element={<SkillStudio />} />

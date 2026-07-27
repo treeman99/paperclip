@@ -74,6 +74,7 @@ import { normalizeResponsibleUserDenialCode } from "./responsible-user-denial-ru
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, listAdapterModelProfiles, runningProcesses } from "../adapters/index.js";
 import { assertModelAllowed } from "../adapters/llm-policy.js";
+import { applyLaneToRuntimeConfig } from "../adapters/agent-lane.js";
 import {
   classifyRunErrorCode,
   CONTEXT_OVERFLOW_GUIDANCE,
@@ -998,8 +999,16 @@ export async function resolveExecutionRunAdapterConfig(input: {
       );
     }
   }
+  // 에이전트가 고른 LLM 레인을 마지막에 반영한다. 사내 모델은 그때그때 바뀌므로
+  // 저장된 값이 아니라 설정 파일의 현재 값으로 실행해야 한다 — 그러지 않으면
+  // 설정 화면에서 모델을 바꾼 뒤 에이전트를 하나씩 다시 저장해야 한다.
+  //
+  // 시크릿 해석이 끝난 뒤에 얹는 이유는, 레인이 주는 값(리전·프로필)이 시크릿이
+  // 아니라 운영자 설정이어서 해석 과정을 거칠 필요가 없기 때문이다.
+  const laneAdjustedConfig = applyLaneToRuntimeConfig(resolvedConfig);
+
   return {
-    resolvedConfig,
+    resolvedConfig: laneAdjustedConfig,
     secretKeys,
     secretManifest: [
       ...(environmentEnvResolution.manifest ?? []),

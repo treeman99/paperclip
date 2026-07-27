@@ -22,6 +22,7 @@ import { pluginsApi } from "@/api/plugins";
 import { ApiError } from "@/api/client";
 import { Link, NavLink } from "@/lib/router";
 import { INSTANCE_SETTINGS_PATH_PREFIX } from "@/lib/instance-settings";
+import { isAdapterManagerHidden } from "@/lib/onprem-ui";
 import { SIDEBAR_SCROLL_RESET_STATE } from "@/lib/navigation-scroll";
 import { queryKeys } from "@/lib/queryKeys";
 import { useCompany } from "@/context/CompanyContext";
@@ -200,10 +201,19 @@ export function CompanySettingsSidebar() {
             </div>
           ) : null}
           <SidebarNavItem
-            to={`${INSTANCE_SETTINGS_PATH_PREFIX}/adapters`}
-            label="Adapters"
+            to={`${INSTANCE_SETTINGS_PATH_PREFIX}/llm`}
+            label="LLM 연결"
             icon={Cpu}
           />
+          {/* 어댑터 설치 화면은 두 레인 밖의 LLM을 붙이기 위한 것이라 사내
+              배포본에서는 감춘다. 서버도 그런 어댑터를 실행 시점에 거부한다. */}
+          {!isAdapterManagerHidden() && (
+            <SidebarNavItem
+              to={`${INSTANCE_SETTINGS_PATH_PREFIX}/adapters`}
+              label="Adapters"
+              icon={Cpu}
+            />
+          )}
         </div>
       </nav>
     </aside>

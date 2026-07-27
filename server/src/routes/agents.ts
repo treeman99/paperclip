@@ -85,6 +85,8 @@ import {
   describeLlmPolicy,
   isAdapterTypeAllowed,
 } from "../adapters/llm-policy.js";
+import { readAgentLaneName, resolveAgentLane } from "../adapters/agent-lane.js";
+import { adapterTypeForLane } from "../adapters/llm-lane-config.js";
 import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
@@ -1315,6 +1317,24 @@ export function agentRoutes(
     adapterType: string | null | undefined,
     adapterConfig: Record<string, unknown>,
   ) {
+    // 레인을 고른 에이전트는 어댑터 종류가 레인에서 파생된다. 여기서 어긋난 조합을
+    // 막지 않으면 저장은 되는데 실행이 엉뚱한 어댑터로 나가고, 그 실패는 설정
+    // 화면과 한참 떨어진 곳에서 드러난다.
+    const laneName = readAgentLaneName(adapterConfig);
+    if (laneName && typeof adapterType === "string") {
+      const resolved = resolveAgentLane(adapterConfig);
+      if (!resolved || resolved.name !== laneName) {
+        throw unprocessable(
+          `LLM 레인 "${laneName}"을 찾을 수 없습니다. 설정 화면에서 레인을 먼저 만드세요.`,
+        );
+      }
+      const expected = adapterTypeForLane(resolved.lane);
+      if (expected !== adapterType) {
+        throw unprocessable(
+          `LLM 레인 "${laneName}"은 ${expected} 로 실행됩니다. adapterType이 "${adapterType}"으로 들어왔습니다.`,
+        );
+      }
+    }
     if (typeof adapterType === "string") {
       const modelCheck = checkModelForAdapter(adapterType, adapterConfig.model);
       if (!modelCheck.ok) {
