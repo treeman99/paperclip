@@ -20,34 +20,77 @@ AI 에이전트(코딩 봇)를 **직원처럼 관리하는 웹 앱**입니다. �
 
 ---
 
-## 1단계 — 설치 위치
+## 어디에 설치할지 먼저 고르세요
 
-**우선은 개인 PC에 설치해서 쓰는 것을 기준으로 안내합니다.** 혼자 써보거나 소규모로
-검증하기에 가장 간단합니다.
+두 가지 방식이 있고, 설치 절차가 상당히 다릅니다. **먼저 어느 쪽인지 정한 뒤 해당
+경로만 따라가세요.**
 
+| | **개인 PC (Windows)** | **우분투 서버 (팀 공용)** |
+|---|---|---|
+| 누가 씁니까 | 나 혼자 | 팀 전체 (로그인 필요) |
+| AI가 일하는 시간 | **내 PC가 켜져 있을 때만** | 24시간 |
+| 코드 빌드·테스트 | 내 PC의 CPU·디스크 | 서버의 CPU·디스크 |
+| 데이터 공유 | 안 됨 | 팀이 함께 봄 |
+| 쓸 수 있는 AI | 사내 모델 + Bedrock Claude | **사내 모델만** |
+| 설치 난이도 | 낮음 | 중간 (systemd·방화벽 필요) |
+| 절차 | [경로 A](#경로-a--개인-pc-windows) | [경로 B](#경로-b--우분투-서버-팀-공용) |
+
+> **서버에서 Bedrock을 못 쓰는 이유:** Bedrock 인증은 AWS SSO 로그인에 기대는데, 로그인
+> 승인은 사람이 브라우저에서 눌러야 하고 세션이 몇 시간마다 만료됩니다. 화면 없는 서버에
+> 그걸 붙이면 밤중에 세션이 끊겨 작업이 멈춥니다. 서버는 사내 모델만 쓰는 것이 안전합니다.
+
+⚠️ **개인 PC에서 공용 서버로 옮기는 자동 이사 기능이 없습니다.** 나중에 팀으로 확대할
+계획이라면 중요한 데이터가 쌓이기 전에 판단하세요.
+
+---
+
+## 0단계 — 사내 미러·프록시 설정 (두 경로 공통)
+
+사내망에서 외부 저장소로 바로 못 나가는 환경이라면, 설치를 시작하기 전에 이것부터
+맞춰야 합니다. 이 단계를 건너뛰면 다음 단계가 전부 "연결할 수 없음"으로 실패합니다.
+
+```bash
+# npm 저장소를 사내 미러로
+npm config set registry https://nexus.corp.internal/repository/npm-group/
+
+# 프록시를 거쳐야 하는 환경이라면 추가로
+npm config set proxy http://proxy.corp.internal:8080
+npm config set https-proxy http://proxy.corp.internal:8080
 ```
-내 PC 한 대 = Paperclip 서버 + 데이터베이스 + 화면
+
+🔴 **`NO_PROXY`에 사내 AI 서버 주소를 반드시 넣으세요.** 안 넣으면 모델 호출이 프록시를
+거치게 되고, 응답을 조금씩 흘려보내는 방식(스트리밍)이 프록시에서 끊겨 작업이 중간에
+멈추거나 타임아웃으로 실패합니다. 원인을 찾기 매우 어려운 종류의 고장입니다.
+
+```powershell
+# Windows — Paperclip을 실행할 창에서 (영구 설정은 시스템 환경 변수에)
+$env:HTTP_PROXY  = "http://proxy.corp.internal:8080"
+$env:HTTPS_PROXY = "http://proxy.corp.internal:8080"
+$env:NO_PROXY    = "localhost,127.0.0.1,llm.corp.internal,.corp.internal"
 ```
 
-알아두실 점:
+```bash
+# 우분투 — 서비스가 읽는 파일에 넣습니다 (B-3에서 만듭니다)
+NO_PROXY=localhost,127.0.0.1,llm.corp.internal,.corp.internal
+```
 
-- **AI는 내 PC가 켜져 있을 때만 일합니다.** 절전이나 종료 상태에서는 멈춥니다
-- **AI가 코드를 내려받고 빌드·테스트를 돌립니다.** 내 PC의 디스크와 CPU를 씁니다
-- **내 데이터는 나만 봅니다.** 팀원과 공유되지 않습니다
+우분투에서는 apt 저장소도 사내 미러로 바꿔야 합니다 (`/etc/apt/sources.list`).
+사내 표준 이미지를 쓰신다면 이미 되어 있을 수 있으니 `apt-get update`로 먼저 확인하세요.
 
-나중에 팀 전체가 쓰게 되면 공용 서버로 옮기는 편이 낫습니다. 다만 **개인 PC에서 공용
-서버로 옮기는 자동 이사 기능이 없으니**, 중요한 데이터가 쌓이기 전에 판단하세요.
+---
 
-## 2단계 — 준비물 챙기기
+# 경로 A — 개인 PC (Windows)
 
-설치할 컴퓨터에서 PowerShell을 열고 하나씩 확인하세요.
+## A-1. 준비물 챙기기
+
+PowerShell을 열고 하나씩 확인하세요.
 
 ```powershell
 # 1) Node.js 22.12 이상, 그리고 x64인지 확인
 node -p "process.version + ' ' + process.arch"
 ```
 
-`v22.12.0 x64` 이상이면 OK. **`arm64`가 나오면** 3단계에서 외부 데이터베이스를 반드시 써야 합니다.
+`v22.12.0 x64` 이상이면 OK.
 
 ```powershell
 # 2) Git 설치 확인 (설치할 때 "Unix tools" 옵션을 켜주세요)
@@ -65,81 +108,392 @@ icacls $Root /inheritance:r /grant:r "Administrators:(OI)(CI)F" /grant:r "$env:U
 
 그리고 미리 받아두셔야 할 정보:
 
-- **사내 AI 서버 주소와 토큰** (담당 부서에서 받으세요) — 4단계에서 파일에 적습니다
+- **사내 AI 서버 주소와 토큰** (담당 부서에서 받으세요)
 - **AWS 계정 정보** (Bedrock을 쓸 경우)
-- **PostgreSQL 접속 정보** (권장 — 없으면 내장 DB를 쓰지만 권장하지 않습니다)
 
----
+## A-2. PostgreSQL 설치하기
 
-## 3단계 — 설치하기
+Paperclip은 데이터를 PostgreSQL에 저장합니다. **직접 설치해서 쓰세요.**
+
+> **왜 내장 DB를 쓰지 않나요?** 프로그램에 딸려 오는 내장 PostgreSQL이 있긴 한데,
+> Windows에서 자주 실패합니다. 관리자 권한으로 실행하면 아예 뜨지 않고, arm64 CPU에서는
+> 지원하지 않으며, 실패해도 원인을 제대로 알려주지 않습니다. 설치가 한 번 더 필요하지만
+> 직접 설치한 PostgreSQL이 훨씬 안정적입니다.
+
+**1) 설치 프로그램 내려받기**
+
+[postgresql.org/download/windows](https://www.postgresql.org/download/windows/) 에서
+EDB 설치 프로그램을 받으세요. **버전 17**을 권장합니다.
+(사내에 소프트웨어 배포 시스템이 있다면 거기서 받으셔도 됩니다.)
+
+**2) 설치 마법사에서 이렇게 고르세요**
+
+| 화면 | 선택 |
+|---|---|
+| Select Components | **PostgreSQL Server**, **Command Line Tools** 는 필수. pgAdmin은 있으면 편하고, **Stack Builder는 체크 해제** |
+| Password | 슈퍼유저(`postgres`) 비밀번호. **적어두세요** — 다음 단계에서 씁니다 |
+| Port | `5432` (기본값 그대로) |
+| Locale | `Default locale` |
+
+**3) 서비스가 떴는지 확인**
 
 ```powershell
+Get-Service postgresql*
+```
+
+`Running` 이면 됩니다. Windows 서비스로 등록되므로 **PC를 켤 때마다 자동으로 시작**됩니다.
+
+**4) Paperclip 전용 사용자와 데이터베이스 만들기**
+
+`postgres` 슈퍼유저를 그대로 쓰지 마세요. 앱 전용 계정을 따로 만듭니다.
+
+```powershell
+$PgBin = 'C:\Program Files\PostgreSQL\17\bin'
+$DbPassword = '여기에-충분히-긴-비밀번호'
+
+& "$PgBin\psql.exe" -U postgres -c "CREATE USER paperclip WITH PASSWORD '$DbPassword';"
+& "$PgBin\psql.exe" -U postgres -c "CREATE DATABASE paperclip OWNER paperclip;"
+```
+
+(슈퍼유저 비밀번호를 물어봅니다. 2)에서 정한 값입니다.)
+
+**5) 접속되는지 확인**
+
+```powershell
+$env:PGPASSWORD = $DbPassword
+& "$PgBin\psql.exe" -U paperclip -h 127.0.0.1 -d paperclip -c "SELECT version();"
+Remove-Item Env:\PGPASSWORD
+```
+
+버전 문자열이 나오면 성공입니다.
+
+**6) (권장) 바깥에서 못 붙게 막기**
+
+기본 설치는 모든 네트워크 카드에서 접속을 기다립니다. 접속 허용 목록이 localhost만
+열어 두기 때문에 실제로 외부에서 붙지는 못하지만, 아예 듣지 않게 하는 편이 낫습니다.
+`C:\Program Files\PostgreSQL\17\data\postgresql.conf` 에서:
+
+```
+listen_addresses = 'localhost'
+```
+
+로 바꾸고 서비스를 다시 시작하세요.
+
+```powershell
+Restart-Service postgresql-x64-17
+```
+
+<details>
+<summary><b>비밀번호에 특수문자를 쓰셨다면</b> — 접속 주소를 만들 때 주의</summary>
+
+접속 주소는 웹 주소와 같은 형식이라 `@ : / ? # &` 같은 문자가 들어가면 잘못 읽힙니다.
+아래처럼 변환한 값을 넣으세요.
+
+```powershell
+[uri]::EscapeDataString('p@ss:word/1')   # 결과: p%40ss%3Aword%2F1
+```
+
+번거로우면 **영문·숫자만으로 긴 비밀번호**를 쓰는 편이 낫습니다.
+</details>
+
+## A-3. Paperclip 설치하기
+
+```powershell
+$env:DATABASE_URL = "postgres://paperclip:비밀번호@127.0.0.1:5432/paperclip"
 npx paperclipai onboard --yes --data-dir C:\PaperclipData
 ```
 
-설치가 끝나면 접속 주소를 알려줍니다. 브라우저로 들어가시면 됩니다.
+`DATABASE_URL`을 넣은 채로 실행해야 설정 파일(`C:\PaperclipData\config.json`)에
+PostgreSQL 사용이 기록됩니다. **한 번만 넣으면 되고, 이후 실행할 때는 다시 넣지 않아도
+됩니다.** 설치가 끝나면 접속 주소를 알려주니 브라우저로 들어가시면 됩니다.
 
-**데이터베이스는 외부 PostgreSQL을 권장합니다.** 내장 DB는 관리자 권한으로 실행하면 실패하고, arm64에서는 아예 동작하지 않으며, 실패해도 원인을 제대로 알려주지 않습니다.
+나중에 접속 정보를 바꾸려면 `npx paperclipai configure --section database` 를 쓰세요.
+
+이후 실행은 이렇게 합니다.
 
 ```powershell
-$env:DATABASE_URL = "postgres://사용자:비밀번호@서버주소:5432/paperclip"
+npx paperclipai run --data-dir C:\PaperclipData
 ```
+
+> **PC를 켤 때 자동으로 띄우고 싶다면** 작업 스케줄러에 "로그온할 때" 트리거로 위 명령을
+> 등록하세요. 다만 **AI는 이 창이 떠 있는 동안에만 일합니다.** 창을 닫거나 PC가 절전으로
+> 들어가면 멈춥니다.
+
+이어서 [AI 연결하기](#ai-연결하기-두-경로-공통)로 가세요.
 
 ---
 
-## 4단계 — AI 연결하기
+# 경로 B — 우분투 서버 (팀 공용)
 
-설정은 **파일 하나**로 끝냅니다. 환경 변수를 여러 개 넣을 필요가 없습니다.
+Ubuntu 22.04 / 24.04 LTS 기준입니다. Docker 없이 서버에 직접 설치하고 systemd로
+관리합니다. **에이전트가 서버에서 실제로 코드를 내려받아 빌드하고 테스트를 돌립니다.**
+디스크와 CPU를 넉넉히 잡으세요 (최소 4코어 / 8GB / 100GB 권장).
 
-`C:\PaperclipData\llm-lanes.json` 파일을 만들고 아래 내용을 넣으세요.
-(설치 위치를 바꾸셨다면 `config.json`이 있는 폴더에 두시면 됩니다.)
+## B-1. 준비물 챙기기
 
-### 사내 오픈웨이트 모델만 쓰는 경우
+```bash
+sudo apt-get update
+# git: 에이전트가 저장소를 다룹니다. build-essential: 빌드가 필요한 npm 패키지용
+sudo apt-get install -y git build-essential curl ca-certificates
+```
+
+**Node.js 22.12 이상**이 필요합니다. 우분투 기본 저장소 버전은 낮으니 따로 설치하세요.
+
+```bash
+node -v   # v22.12.0 이상이어야 합니다
+```
+
+낮거나 없다면 — 사내 미러에 NodeSource 저장소가 있으면 그것을 쓰고, 없으면 공식
+tarball을 풉니다.
+
+```bash
+# 공식 tarball 방식 (외부 저장소 설정이 필요 없습니다)
+curl -fsSLO https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz
+sudo tar -xJf node-v22.12.0-linux-x64.tar.xz -C /usr/local --strip-components=1
+node -v
+```
+
+**전용 계정과 폴더를 만듭니다.** 서비스를 일반 사용자 권한으로 돌리기 위해서입니다.
+
+```bash
+sudo useradd --system --create-home --home-dir /opt/paperclip --shell /bin/bash paperclip
+sudo mkdir -p /opt/paperclip/data /etc/paperclip
+sudo chown -R paperclip:paperclip /opt/paperclip
+sudo chmod 700 /opt/paperclip/data
+```
+
+🔴 `/opt/paperclip/data` 안에 **사내 AI 토큰과 그것을 푸는 열쇠 파일**이 들어갑니다.
+`chmod 700`을 건너뛰지 마세요.
+
+## B-2. PostgreSQL 설치하기
+
+```bash
+sudo apt-get install -y postgresql
+sudo systemctl enable --now postgresql
+systemctl status postgresql --no-pager
+```
+
+우분투 기본 패키지는 배포판에 따라 PostgreSQL 14~16이 설치됩니다. **모두 정상 동작합니다.**
+
+**Paperclip 전용 사용자와 데이터베이스 만들기:**
+
+```bash
+DB_PASSWORD='여기에-충분히-긴-비밀번호'
+sudo -u postgres psql -c "CREATE USER paperclip WITH PASSWORD '$DB_PASSWORD';"
+sudo -u postgres psql -c "CREATE DATABASE paperclip OWNER paperclip;"
+```
+
+**접속 확인:**
+
+```bash
+PGPASSWORD="$DB_PASSWORD" psql -U paperclip -h 127.0.0.1 -d paperclip -c "SELECT version();"
+```
+
+우분투 패키지는 기본이 **localhost 전용**이라 별도로 막을 것이 없습니다.
+DB를 다른 서버에 두신다면 그 서버의 `pg_hba.conf`와 방화벽을 따로 여셔야 합니다.
+
+> 위 명령들에는 비밀번호가 그대로 들어가 셸 기록에 남습니다. B-3까지 끝낸 뒤
+> `history -c` 로 지우세요. 비밀번호에 `$` 나 공백이 있으면 따옴표 안에서도 다르게
+> 해석될 수 있으니, **영문·숫자만으로 긴 비밀번호**를 쓰는 편이 안전합니다.
+
+## B-3. Paperclip 설치하고 서비스로 등록하기
+
+**1) 설치**
+
+```bash
+# -H 를 빼지 마세요. 빼면 npm이 캐시를 root 폴더에 쓰려다 권한 오류로 실패합니다.
+sudo -H -u paperclip npm install --prefix /opt/paperclip paperclipai
+```
+
+**2) 접속 정보를 파일로 분리**
+
+DB 비밀번호가 서비스 파일이나 명령 기록에 남지 않게 별도 파일에 둡니다.
+
+```bash
+sudo tee /etc/paperclip/paperclip.env >/dev/null <<'EOF'
+DATABASE_URL=postgres://paperclip:비밀번호@127.0.0.1:5432/paperclip
+# 사내 프록시를 쓴다면 (사내 AI 주소는 NO_PROXY에 꼭 넣으세요)
+# HTTP_PROXY=http://proxy.corp.internal:8080
+# HTTPS_PROXY=http://proxy.corp.internal:8080
+# NO_PROXY=localhost,127.0.0.1,.corp.internal
+EOF
+sudo chown paperclip:paperclip /etc/paperclip/paperclip.env
+sudo chmod 600 /etc/paperclip/paperclip.env
+```
+
+**3) 최초 설정을 한 번 실행**
+
+팀이 접속해야 하므로 **로그인 필요(authenticated)** 모드로, 사내망에서 보이도록
+`--bind lan`으로 설정합니다.
+
+```bash
+sudo -H -u paperclip env \
+  DATABASE_URL='postgres://paperclip:비밀번호@127.0.0.1:5432/paperclip' \
+  PAPERCLIP_DEPLOYMENT_MODE=authenticated \
+  PAPERCLIP_DEPLOYMENT_EXPOSURE=private \
+  /opt/paperclip/node_modules/.bin/paperclipai onboard --yes --bind lan \
+  --data-dir /opt/paperclip/data
+```
+
+> `--yes`만 주고 `--bind`를 생략하면 **로그인 없는 localhost 전용**으로 굳어집니다.
+> 팀 공용 서버에서는 반드시 `--bind lan`을 함께 주세요.
+
+이 명령에는 비밀번호가 그대로 들어가므로 셸 기록에 남습니다. 끝나면 지우세요.
+
+```bash
+history -d $((HISTCMD-1)) 2>/dev/null || history -c
+```
+
+**4) systemd 서비스 등록**
+
+```bash
+sudo tee /etc/systemd/system/paperclip.service >/dev/null <<'EOF'
+[Unit]
+Description=Paperclip
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=paperclip
+Group=paperclip
+WorkingDirectory=/opt/paperclip
+EnvironmentFile=/etc/paperclip/paperclip.env
+ExecStart=/opt/paperclip/node_modules/.bin/paperclipai run --data-dir /opt/paperclip/data
+Restart=on-failure
+RestartSec=5
+# 에이전트가 서버에서 실제로 코드를 빌드하므로 파일시스템을 강하게 막으면 작업이
+# 깨집니다. 권한 상승만 차단하고 나머지는 열어 둡니다.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now paperclip
+```
+
+**5) 확인**
+
+```bash
+systemctl status paperclip --no-pager
+journalctl -u paperclip -f     # 로그 실시간 보기
+```
+
+## B-4. 접근 통제
+
+**방화벽으로 사내망만 열어 주세요.**
+
+```bash
+# 🔴 SSH를 먼저 허용하세요. 이 줄을 빼고 enable 하면 원격 접속이 끊깁니다.
+sudo ufw allow OpenSSH
+sudo ufw allow from 10.0.0.0/8 to any port 3100 proto tcp
+sudo ufw enable
+```
+
+(대역은 사내 환경에 맞게 바꾸세요.)
+
+🔴 **외부 AI 서비스로 나가는 길도 막아야 합니다.** 코드를 실제로 들고 있는 것은
+에이전트가 실행하는 별도 프로그램이라, 앱 안에서 막는 데 한계가 있습니다.
+
+`api.anthropic.com`, `api.openai.com`, `chatgpt.com`,
+`generativelanguage.googleapis.com`, `api.x.ai`, `cursor.com`
+
+**도메인 이름으로 붙게 하려면** 역방향 프록시(Nginx 등)를 앞에 두고 HTTPS를 태우세요.
+그때는 `config.json`의 `server.allowedHostnames`에 그 도메인을 추가해야 합니다.
+
+## B-5. 백업 확인
+
+DB 백업은 자동으로 돌고 있습니다. **어디에 쌓이는지 한 번 확인하고, 그 폴더를 사내
+백업 대상에 넣으세요.**
+
+```bash
+grep -A 6 '"backup"' /opt/paperclip/data/config.json
+```
+
+이어서 [AI 연결하기](#ai-연결하기-두-경로-공통)로 가세요.
+**서버에서는 사내 모델 레인만 만드시면 됩니다.**
+
+---
+
+## AI 연결하기 (두 경로 공통)
+
+**화면에서 하시면 됩니다.** 서버를 켜고 브라우저에서
+`설정 → 인스턴스 설정 → LLM 연결`로 들어가세요.
+
+### 사내 오픈웨이트 모델을 쓰는 경우
+
+1. `+ 사내 모델` 버튼을 누릅니다.
+2. 레인 이름(예: `사내GPU-A`), 서버 주소(`https://사내주소/v1`), 받으신 토큰,
+   모델 이름을 넣습니다.
+3. `연결 확인`을 눌러 봅니다. 서버가 붙으면 **지금 서빙 중인 모델 목록**이 뜨므로,
+   모델 이름을 직접 타이핑하는 대신 골라 넣으실 수 있습니다.
+4. `저장`을 누릅니다.
+
+토큰은 화면에 다시 표시되지 않고, 실행 기록이나 AI 프로그램에도 전달되지 않습니다.
+그래도 **설정 파일이 있는 폴더의 권한은 잠가두셔야 합니다** (개인 PC는 A-1의 3번,
+서버는 B-1의 `chmod 700`).
+
+### AWS Bedrock의 Claude를 쓰는 경우 — 개인 PC 전용
+
+> 🔴 **우분투 서버에서는 이 절차를 하지 마세요.** SSO 로그인은 브라우저 승인이 필요하고
+> 세션이 몇 시간마다 만료되므로, 화면 없는 서버에서는 밤중에 끊겨 작업이 멈춥니다.
+> 서버에는 사내 모델 레인만 만드세요.
+
+1. `AWS SSO 로그인` 칸에 프로필 이름(예: `corp-sso`)과 기본 리전을 넣고 `저장`.
+2. `SSO 로그인` 버튼을 누릅니다. 브라우저가 열리고, 안 열리면 화면에 뜬 주소와
+   코드로 승인하시면 됩니다. 로그인 상태는 화면에서 바로 확인됩니다.
+3. `+ Bedrock` 버튼으로 레인을 만들고 모델 id를 넣습니다.
+   (예: `us.anthropic.claude-sonnet-4-5-20250929-v2:0`)
+
+> **AWS CLI v2가 설치되어 있어야 합니다.** 프로필이 아직 없으면 화면이
+> `aws configure sso --profile <이름>` 명령을 알려 줍니다. 그 명령만 한 번
+> 실행하시면 이후로는 화면의 버튼으로 로그인하실 수 있습니다.
+
+### 둘 다 쓰는 경우 (개인 PC)
+
+레인을 두 개 만드시면 됩니다. 에이전트마다 어느 레인을 쓸지 고를 수 있고,
+고르지 않은 에이전트는 `기본`으로 표시된 레인을 씁니다.
+
+### 파일로 직접 넣고 싶다면
+
+화면이 읽고 쓰는 파일은 `llm-lanes.json` 하나입니다. `config.json`이 있는 폴더에
+있습니다.
+
+| 경로 | 위치 |
+|---|---|
+| 개인 PC | `C:\PaperclipData\llm-lanes.json` |
+| 우분투 서버 | `/opt/paperclip/data/llm-lanes.json` |
+
+서버에서 손으로 고치셨다면 서비스를 다시 시작하세요 — `sudo systemctl restart paperclip`.
+(화면에서 저장한 경우에는 재시작이 필요 없습니다.)
 
 ```json
 {
-  "inHouse": {
-    "baseUrl": "https://사내주소/v1",
-    "model": "모델이름",
-    "apiKey": "받으신-토큰"
-  }
+  "lanes": {
+    "사내GPU-A": {
+      "kind": "inhouse",
+      "baseUrl": "https://사내주소/v1",
+      "model": "모델이름",
+      "apiKey": "받으신-토큰"
+    },
+    "Bedrock 사내": {
+      "kind": "bedrock",
+      "region": "ap-northeast-2",
+      "model": "us.anthropic.claude-sonnet-4-5-20250929-v2:0"
+    }
+  },
+  "awsSso": { "profile": "corp-sso", "region": "ap-northeast-2" }
 }
 ```
-
-**환경 변수를 따로 넣을 필요가 없습니다.** 토큰까지 이 파일 하나에 들어갑니다.
-
-토큰은 파일에만 남고, 실행 기록이나 AI 프로그램에는 전달되지 않도록 처리됩니다.
-그래도 **이 파일이 있는 폴더의 권한은 2단계에서 잠가두셔야 합니다.**
 
 > 회사 정책상 토큰을 파일에 두면 안 되는 경우에는 `apiKey` 대신
 > `"apiKeyEnv": "CORP_LLM_KEY"` 를 쓰고, 그 이름으로 환경 변수를 지정하세요.
 
-### AWS Bedrock의 Claude만 쓰는 경우
-
-```json
-{
-  "bedrock": {
-    "region": "ap-northeast-2"
-  }
-}
-```
-
-AWS 인증은 평소 쓰시는 방식(프로필, 역할, 액세스 키) 그대로 동작합니다.
-
-### 둘 다 쓰는 경우
-
-```json
-{
-  "inHouse": {
-    "baseUrl": "https://사내주소/v1",
-    "model": "모델이름",
-    "apiKey": "받으신-토큰"
-  },
-  "bedrock": {
-    "region": "ap-northeast-2"
-  }
-}
-```
+이전 버전에서 쓰던 형식(`inHouse` / `bedrock`을 맨 위에 둔 파일)도 그대로 동작합니다.
+화면에서 무언가 저장하시면 자동으로 새 형식으로 바뀝니다.
 
 ### 이 파일이 대신 해주는 일
 
@@ -158,23 +512,20 @@ AWS 인증은 평소 쓰시는 방식(프로필, 역할, 액세스 키) 그대�
 
 ### 에이전트를 만들 때
 
-**사내 모델을 쓸 때:**
+에이전트 화면에서 **LLM 항목의 레인 이름 하나만** 고르시면 됩니다. 어댑터 종류와
+모델 이름은 그 레인에서 자동으로 정해지므로 따로 넣지 않으셔도 됩니다.
 
-- 모델: `corp/모델이름` — 반드시 `corp/` 로 시작합니다
-- `dangerouslySkipPermissions`: **켜기(true)**
+예전 버전에 있던 실행 명령, 환경 변수, 시크릿 접근, 타임아웃, 하트비트 같은 항목은
+화면에서 빠졌습니다. 사내 배포본에서는 이 값들이 설치본 전체에 고정되어 있어서,
+에이전트마다 다르게 넣을 수 있는 것처럼 보이면 오히려 혼란만 생기기 때문입니다.
+이름·직함·보고선, 프롬프트, 스킬·도구는 그대로 있습니다.
 
-⚠️ `dangerouslySkipPermissions`를 끄면 **아무 오류 메시지 없이** 사내 AI 설정이 통째로 무시됩니다. 반드시 켜두세요.
-
-**Bedrock을 쓸 때:**
-
-모델 이름에 Bedrock 전용 이름을 넣어야 합니다.
-
-- ✅ `us.anthropic.claude-sonnet-4-5-20250929-v2:0`
-- ❌ `sonnet`, `claude-haiku-4-5` — 이건 외부 서버로 나가기 때문에 거부됩니다
+**모델이 바뀌면** `LLM 연결` 화면에서 레인의 모델 이름만 고치시면 됩니다.
+에이전트를 하나씩 다시 저장하지 않아도 다음 실행부터 반영됩니다.
 
 ---
 
-## 5단계 — 잘 되는지 확인하기
+## 잘 되는지 확인하기 (두 경로 공통)
 
 에이전트 하나를 만들고 간단한 일을 시켜보세요. 작업이 끝나면 **실행 기록(commandNotes)** 에 아래 두 줄이 있는지 확인하세요.
 
@@ -192,30 +543,52 @@ Pinned OpenCode small_model to corp/모델이름.
 | 증상 | 원인과 해결 |
 |---|---|
 | 작업이 실패하고 `context_overflow` 라고 나옴 | 이슈 내용이 너무 길어서 AI가 한 번에 못 읽습니다. 이슈 설명과 댓글을 줄이거나 에이전트에 붙인 스킬 수를 줄이세요. **다시 시도해도 똑같이 실패**하니 내용을 줄이는 게 유일한 해결입니다 |
-| 화면에 사내 모델이 안 보임 | "Refresh models" 버튼을 누르지 마세요. 그래도 안 보이면 `llm-lanes.json` 의 `model` 값에 오타가 없는지 보세요 |
-| 에이전트를 만들려는데 어댑터가 몇 개 없음 | 정상입니다. 허용된 2개 외에는 일부러 숨겨져 있습니다 |
+| 에이전트 화면의 LLM 목록이 비어 있음 | `설정 → 인스턴스 설정 → LLM 연결`에서 레인을 먼저 하나 만드세요 |
+| 에이전트에 모델을 직접 넣을 칸이 없음 | 정상입니다. 모델은 레인에서 정해집니다. 바꾸시려면 `LLM 연결` 화면에서 레인을 고치세요 |
+| SSO 로그인 버튼이 "AWS CLI 없음"이라고 함 | AWS CLI v2를 설치한 뒤 **서버를 다시 시작**하세요. 설치 직후에는 서버가 예전 PATH를 들고 있습니다 |
+| SSO 로그인 버튼이 "프로필 없음"이라고 함 | 화면에 나온 `aws configure sso --profile <이름>` 을 터미널에서 한 번 실행하세요 |
 | 작업을 취소했는데 뭔가 계속 도는 것 같음 | 작업 관리자에서 `node.exe` / `opencode.exe` 를 확인하세요. 남아 있으면 알려주세요 (수정은 했지만 실제 Windows에서 아직 검증 전입니다) |
 | 예산을 설정했는데 작동을 안 함 | 알려진 제약입니다. 사내 모델은 가격표가 없어서 비용이 0원으로 기록되고 예산 제한이 걸리지 않습니다. 사용량은 AI 서버 쪽에서 따로 확인하셔야 합니다 |
+
+### 설치·데이터베이스 문제
+
+| 증상 | 원인과 해결 |
+|---|---|
+| `password authentication failed for user "paperclip"` | 접속 주소의 비밀번호가 틀렸거나, 특수문자가 변환되지 않았습니다. [특수문자 안내](#a-2-postgresql-설치하기)를 보세요 |
+| `ECONNREFUSED 127.0.0.1:5432` | PostgreSQL이 꺼져 있습니다. Windows는 `Get-Service postgresql*`, 우분투는 `systemctl status postgresql` |
+| `database "paperclip" does not exist` | A-2 / B-2의 `CREATE DATABASE` 단계를 건너뛰셨습니다 |
+| 내장 DB로 뜨려다 실패함 | `DATABASE_URL`을 넣지 않은 채 설치하셨습니다. `paperclipai configure --section database` 로 PostgreSQL을 지정하세요 |
+| npm 설치가 "연결할 수 없음"으로 실패 | [0단계](#0단계--사내-미러프록시-설정-두-경로-공통)의 사내 미러·프록시 설정을 먼저 하세요 |
+| 모델 호출이 중간에 멈추거나 타임아웃 | 프록시를 거치고 있을 가능성이 큽니다. `NO_PROXY`에 사내 AI 서버 주소를 넣으세요 |
+| (서버) 서비스가 계속 재시작됨 | `journalctl -u paperclip -n 100 --no-pager` 로 원인을 보세요. 대개 DB 접속 정보 또는 `/opt/paperclip/data` 권한 문제입니다 |
+| (서버) 팀원이 접속을 못 함 | `--bind lan` 없이 설치하면 localhost 전용으로 굳습니다. B-3의 3)을 다시 실행하고 방화벽도 확인하세요 |
+| (서버) npm 설치가 권한 오류로 실패 | `sudo -H -u paperclip` 에서 `-H` 를 빼셨습니다. 빼면 npm이 root 폴더에 캐시를 쓰려고 합니다 |
 
 ---
 
 ## 꼭 알아두실 점
 
 **1. 외부 차단은 방화벽으로 하셔야 합니다.**
-AI를 실제로 실행하는 건 별도 프로그램이라 앱 안에서 막는 데 한계가 있습니다. 아래 주소들을 네트워크에서 막아주세요.
+AI를 실제로 실행하는 건 별도 프로그램이라 앱 안에서 막는 데 한계가 있습니다. 아래 주소들을 네트워크에서 막아주세요. **개인 PC든 서버든 똑같이 필요합니다.**
 
 `api.anthropic.com`, `api.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `api.x.ai`, `cursor.com`
 
 **2. 사용 정보 외부 전송은 자동으로 차단됩니다.**
-4단계의 설정 파일을 넣으면 함께 처리됩니다. 끄고 싶지 않으시면 파일에 `"disableTelemetry": false` 를 넣으세요.
+LLM 설정 파일을 넣으면 함께 처리됩니다. 끄고 싶지 않으시면 파일에 `"disableTelemetry": false` 를 넣으세요.
 
-**3. 아직 실제 Windows에서 검증되지 않은 부분이 있습니다.**
+**3. 아직 실제로 검증되지 않은 부분이 있습니다.**
 Windows 관련 수정은 코드와 테스트로만 확인했습니다. 처음 설치하실 때 [Windows 검증 체크리스트](docs/deploy/windows-validation.md)를 한 번 돌려보시길 권합니다. 10분이면 됩니다.
+**우분투 서버 절차(경로 B) 역시 실제 서버에서 처음부터 끝까지 돌려본 적이 없습니다.** 막히는 지점이 있으면 알려주세요.
+
+**4. 개인 PC와 서버는 데이터가 이어지지 않습니다.**
+개인 PC에서 쓰던 이슈·에이전트를 서버로 옮기는 자동 이사 기능이 없습니다. 팀으로 확대할 계획이라면 처음부터 서버에 설치하시는 편이 낫습니다.
 
 ## 더 자세한 문서
 
 - [사내 AI 연결 상세 가이드](docs/deploy/on-prem-llm.md) — 설정값 전체와 동작 원리
 - [Windows 검증 체크리스트](docs/deploy/windows-validation.md) — 설치 전 확인 사항
+- [데이터베이스 선택지](docs/deploy/database.md) — 내장 DB·직접 설치·호스팅 비교 (영문)
+- [접속 모드](docs/deploy/deployment-modes.md) — `local_trusted` 와 `authenticated` 의 차이 (영문)
 
 ---
 ---
