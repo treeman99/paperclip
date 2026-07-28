@@ -57,7 +57,13 @@ export type AwsSsoStatus =
   | { state: "cli_missing"; message: string }
   | { state: "profile_missing"; message: string; remediation: string }
   | { state: "logged_out"; message: string }
-  | { state: "logged_in"; accountId: string | null; arn: string | null };
+  | {
+      state: "logged_in";
+      accountId: string | null;
+      arn: string | null;
+      /** 세션 만료 시각(ISO). AWS CLI 캐시에서 읽으며 모르면 null. */
+      expiresAt: string | null;
+    };
 
 export type AwsSsoLoginState =
   | { state: "idle" }
@@ -66,14 +72,34 @@ export type AwsSsoLoginState =
       profile: string;
       verificationUrl: string | null;
       userCode: string | null;
+      usingDeviceCode: boolean;
       output: string;
     }
   | { state: "succeeded"; profile: string; output: string }
+  | { state: "cancelled"; profile: string }
   | { state: "failed"; profile: string; output: string; message: string };
 
 export interface AwsSsoSnapshot {
   status: AwsSsoStatus;
   login: AwsSsoLoginState;
+}
+
+/** `~/.aws/config`에 있는, SSO 로그인이 가능한 프로필. */
+export interface AwsSsoProfileInfo {
+  name: string;
+  startUrl: string;
+  ssoRegion: string | null;
+  accountId: string | null;
+  roleName: string | null;
+  sessionName: string | null;
+}
+
+/** 이 PC의 AWS 환경. 상태와 달리 자주 바뀌지 않는다. */
+export interface AwsSsoEnvironment {
+  cli: { available: boolean; version: string | null; command: string };
+  /** 실제로 읽은 설정 파일. 파일이 없으면 null. */
+  configPath: string | null;
+  profiles: AwsSsoProfileInfo[];
 }
 
 /** 에이전트 설정 화면이 보는 최소 정보. 서버 주소·토큰은 담기지 않는다. */
@@ -108,7 +134,11 @@ export const llmLanesApi = {
     ),
   saveAwsSso: (payload: { profile: string | null; region: string | null }) =>
     api.put<LlmLaneSettings>("/instance/aws-sso", payload),
+  awsSsoEnvironment: () => api.get<AwsSsoEnvironment>("/instance/aws-sso/environment"),
   awsSsoStatus: () => api.get<AwsSsoSnapshot>("/instance/aws-sso/status"),
-  awsSsoLogin: () => api.post<AwsSsoLoginState>("/instance/aws-sso/login", {}),
+  awsSsoLogin: (payload: { useDeviceCode?: boolean } = {}) =>
+    api.post<AwsSsoLoginState>("/instance/aws-sso/login", payload),
   cancelAwsSsoLogin: () => api.delete<AwsSsoLoginState>("/instance/aws-sso/login"),
+  awsSsoLogout: () =>
+    api.post<{ ok: boolean; message: string }>("/instance/aws-sso/logout", {}),
 };

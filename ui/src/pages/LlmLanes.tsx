@@ -18,6 +18,7 @@ import {
   ExternalLink,
   KeyRound,
   Loader2,
+  LogOut,
   Pencil,
   Plus,
   RefreshCw,
@@ -36,6 +37,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "@/context/ToastContext";
@@ -154,6 +156,7 @@ export function LlmLanes() {
   const [ssoProfile, setSsoProfile] = useState("");
   const [ssoRegion, setSsoRegion] = useState("");
   const [ssoTouched, setSsoTouched] = useState(false);
+  const [useDeviceCode, setUseDeviceCode] = useState(false);
 
   useEffect(() => {
     setBreadcrumbs([
@@ -189,6 +192,20 @@ export function LlmLanes() {
     // 짧은 주기로 확인한다. 그 외에는 굳이 자주 물을 이유가 없다.
     refetchInterval: (query) =>
       query.state.data?.login.state === "pending" ? 3000 : false,
+  });
+
+  /**
+   * 이 PC의 AWS 환경 — CLI가 있는지, `~/.aws/config`에 어떤 프로필이 있는지.
+   *
+   * 프로필 이름을 손으로 받아 적게 하면 오타와 "만든 적 없음"이 똑같이
+   * "프로필 없음"으로 돌아와 사용자가 구분할 수 없다. 실제로 있는 이름을
+   * 보여 주면 그 구분 자체가 필요 없어진다.
+   */
+  const awsEnvQuery = useQuery({
+    queryKey: queryKeys.instance.awsEnvironment,
+    queryFn: () => llmLanesApi.awsSsoEnvironment(),
+    // CLI 설치 여부와 설정 파일은 화면을 보는 동안 거의 바뀌지 않는다.
+    staleTime: 60_000,
   });
 
   const invalidate = async () => {
@@ -278,12 +295,31 @@ export function LlmLanes() {
   });
 
   const ssoLoginMutation = useMutation({
-    mutationFn: () => llmLanesApi.awsSsoLogin(),
+    mutationFn: () => llmLanesApi.awsSsoLogin({ useDeviceCode }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.instance.awsSso });
     },
     onError: (error) =>
       pushToast({ title: error instanceof Error ? error.message : "로그인을 시작하지 못했습니다.", tone: "error" }),
+  });
+
+  const ssoCancelMutation = useMutation({
+    mutationFn: () => llmLanesApi.cancelAwsSsoLogin(),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.instance.awsSso });
+    },
+    onError: (error) =>
+      pushToast({ title: error instanceof Error ? error.message : "중단하지 못했습니다.", tone: "error" }),
+  });
+
+  const ssoLogoutMutation = useMutation({
+    mutationFn: () => llmLanesApi.awsSsoLogout(),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.instance.awsSso });
+      pushToast({ title: result.message, tone: result.ok ? "success" : "error" });
+    },
+    onError: (error) =>
+      pushToast({ title: error instanceof Error ? error.message : "로그아웃하지 못했습니다.", tone: "error" }),
   });
 
   if (settingsQuery.isLoading) {
@@ -302,6 +338,10 @@ export function LlmLanes() {
   const lanes = settings?.lanes ?? [];
   const sso = ssoQuery.data;
   const login = sso?.login;
+  const awsEnv = awsEnvQuery.data;
+  const knownProfiles = awsEnv?.profiles ?? [];
+  // 입력칸에 적힌 이름이 이 PC에 실제로 있는 프로필인지. 저장하기 전에 알려 준다.
+  const selectedProfile = knownProfiles.find((entry) => entry.name === ssoProfile.trim()) ?? null;
   const draftModelOptions =
     draftTest?.ok && draftTest.models && draftTest.models.length > 0 ? draftTest.models : null;
 
@@ -326,6 +366,19 @@ export function LlmLanes() {
             Bedrock은 이 PC의 AWS SSO 세션으로 인증합니다. 세션은 몇 시간마다 만료되므로
             만료되면 아래 버튼으로 다시 로그인하세요.
           </p>
+
+          {/*
+            CLI 여부는 프로필을 저장하기 전에 알아야 한다. 없는 상태로 프로필만
+            열심히 맞춰 봐야 로그인 버튼은 어차피 실패한다.
+          */}
+          {awsEnv && !awsEnv.cli.available ? (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+              AWS CLI를 실행하지 못했습니다. 터미널에서 <code>aws --version</code>이 되는데도
+              이렇게 나오면, 서버를 시작한 뒤에 설치한 것입니다 — 서버를 다시 시작하세요.
+              그렇지 않다면 AWS CLI v2를 먼저 설치하세요.
+            </div>
+          ) : null}
+
           <div className="grid gap-3 sm:grid-cols-2">
             <LaneField label="프로필 이름" hint="~/.aws/config 의 profile 이름">
               <Input
@@ -336,7 +389,15 @@ export function LlmLanes() {
                 }}
                 placeholder="corp-sso"
                 className="font-mono text-sm"
+                list={knownProfiles.length > 0 ? "aws-sso-profile-options" : undefined}
               />
+              {knownProfiles.length > 0 ? (
+                <datalist id="aws-sso-profile-options">
+                  {knownProfiles.map((profile) => (
+                    <option key={profile.name} value={profile.name} />
+                  ))}
+                </datalist>
+              ) : null}
             </LaneField>
             <LaneField label="기본 리전" hint="레인이 리전을 비워 두면 이 값을 씁니다">
               <Input
@@ -350,6 +411,55 @@ export function LlmLanes() {
               />
             </LaneField>
           </div>
+
+          {knownProfiles.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {knownProfiles.map((profile) => (
+                <button
+                  key={profile.name}
+                  type="button"
+                  onClick={() => {
+                    setSsoTouched(true);
+                    setSsoProfile(profile.name);
+                    // 프로필이 리전을 알고 있으면 같이 채운다. 어차피 같은 값을
+                    // 손으로 옮겨 적게 될 자리다.
+                    if (profile.ssoRegion && !ssoRegion.trim()) setSsoRegion(profile.ssoRegion);
+                  }}
+                  className={cn(
+                    "rounded-full border border-border px-2 py-0.5 font-mono text-xs transition-colors",
+                    ssoProfile.trim() === profile.name
+                      ? "bg-accent text-accent-foreground"
+                      : "text-muted-foreground hover:bg-accent/50",
+                  )}
+                >
+                  {profile.name}
+                </button>
+              ))}
+            </div>
+          ) : awsEnv ? (
+            // 아직 못 읽어 온 동안에는 아무 말도 하지 않는다. 로딩 중에 "프로필이
+            // 없습니다"가 스쳐 지나가면 사실이 아닌 것을 본 셈이 된다.
+            <div className="text-xs text-muted-foreground">
+              {awsEnv.configPath
+                ? "이 PC의 AWS 설정 파일에 SSO 프로필이 없습니다."
+                : "이 PC에 AWS 설정 파일이 없습니다."}{" "}
+              터미널에서 <code className="font-mono">aws configure sso --profile 이름</code>을 한 번
+              실행해 만드세요. Paperclip은 이 파일을 고치지 않습니다.
+            </div>
+          ) : null}
+
+          {selectedProfile ? (
+            <div className="font-mono text-[11px] break-all text-muted-foreground">
+              {[
+                selectedProfile.startUrl,
+                selectedProfile.accountId,
+                selectedProfile.roleName,
+                selectedProfile.ssoRegion,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </div>
+          ) : null}
 
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -375,6 +485,26 @@ export function LlmLanes() {
                 </>
               )}
             </Button>
+            {login?.state === "pending" ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => ssoCancelMutation.mutate()}
+                disabled={ssoCancelMutation.isPending}
+              >
+                중단
+              </Button>
+            ) : null}
+            {sso?.status.state === "logged_in" ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => ssoLogoutMutation.mutate()}
+                disabled={ssoLogoutMutation.isPending}
+              >
+                <LogOut className="h-3.5 w-3.5" /> 로그아웃
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="ghost"
@@ -387,7 +517,26 @@ export function LlmLanes() {
             {sso ? <SsoStatusBadge status={sso.status} /> : null}
           </div>
 
-          {sso?.status.state === "cli_missing" ? (
+          {/*
+            기본 로그인 흐름(v2.22 이후)은 브라우저가 이 PC의 로컬 포트로 되돌아와야
+            끝난다. 브라우저가 다른 기기에 있거나 사내 정책이 그 콜백을 막으면
+            영원히 끝나지 않으므로, 그럴 때 쓸 수 있는 선택지를 열어 둔다.
+          */}
+          <label className="flex items-start gap-2 text-xs text-muted-foreground">
+            <Checkbox
+              checked={useDeviceCode}
+              onCheckedChange={(checked) => setUseDeviceCode(checked === true)}
+              disabled={login?.state === "pending"}
+              className="mt-0.5"
+            />
+            <span>
+              장치 코드 방식으로 로그인합니다. 브라우저를 다른 기기에서 열어야 하거나,
+              기본 방식이 끝까지 진행되지 않을 때 켜세요.
+            </span>
+          </label>
+
+          {/* 위쪽 배너가 이미 같은 말을 하고 있으면 두 번 띄우지 않는다. */}
+          {sso?.status.state === "cli_missing" && awsEnv?.cli.available !== false ? (
             <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
               {sso.status.message}
             </div>
@@ -402,7 +551,9 @@ export function LlmLanes() {
           {login?.state === "pending" ? (
             <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs space-y-1.5">
               <div className="text-muted-foreground">
-                브라우저가 자동으로 열리지 않으면 아래 주소에서 코드를 입력하세요.
+                {login.usingDeviceCode
+                  ? "아래 주소를 브라우저에서 열고 코드를 입력해 승인하세요."
+                  : "브라우저가 자동으로 열리지 않으면 아래 주소를 여세요."}
               </div>
               {login.verificationUrl ? (
                 <a
@@ -427,6 +578,11 @@ export function LlmLanes() {
               {login.message}
             </div>
           ) : null}
+          {login?.state === "cancelled" ? (
+            <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              로그인을 중단했습니다.
+            </div>
+          ) : null}
           {login?.state === "succeeded" ? (
             <div className="rounded-md border border-green-500/30 bg-green-500/10 px-3 py-2 text-xs text-green-700 dark:text-green-300">
               로그인이 끝났습니다.
@@ -435,6 +591,11 @@ export function LlmLanes() {
           {!settings?.awsSso.profile && hasBedrockLane ? (
             <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
               Bedrock 레인이 있는데 SSO 프로필이 비어 있습니다. 프로필 이름을 저장하세요.
+            </div>
+          ) : null}
+          {awsEnv?.configPath ? (
+            <div className="font-mono text-[10px] break-all text-muted-foreground/70">
+              {awsEnv.configPath}
             </div>
           ) : null}
         </Card>
@@ -731,12 +892,25 @@ export function LlmLanes() {
   );
 }
 
+/**
+ * 세션이 언제 끊기는지. 몇 시간마다 만료되는 배포라 "남은 시간"이 실제로
+ * 필요한 정보다. 이미 지난 값은 보여 주지 않는다 — 자격증명은 방금 통과했는데
+ * 캐시가 낡아 있는 경우이고, 그때 만료를 띄우면 서로 모순되어 보인다.
+ */
+function formatExpiry(expiresAt: string): string | null {
+  const parsed = new Date(expiresAt);
+  if (Number.isNaN(parsed.getTime()) || parsed.getTime() <= Date.now()) return null;
+  return parsed.toLocaleString();
+}
+
 function SsoStatusBadge({ status }: { status: AwsSsoStatus }) {
   if (status.state === "logged_in") {
+    const expiry = status.expiresAt ? formatExpiry(status.expiresAt) : null;
     return (
       <span className="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
         <Check className="h-3.5 w-3.5" />
         로그인됨{status.accountId ? ` · 계정 ${status.accountId}` : ""}
+        {expiry ? ` · ${expiry}까지` : ""}
       </span>
     );
   }

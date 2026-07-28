@@ -23,11 +23,15 @@ import {
   type LaneInput,
 } from "../adapters/llm-lane-service.js";
 import {
+  assertValidProfileName,
   cancelAwsSsoLogin,
+  detectAwsCli,
   getAwsSsoStatus,
+  logoutAwsSso,
   readLoginState,
   startAwsSsoLogin,
 } from "../adapters/aws-sso.js";
+import { readAwsSsoProfiles } from "../adapters/aws-config-profiles.js";
 import { readAgentLaneName } from "../adapters/agent-lane.js";
 import { assertBoardOrgAccess } from "./authz.js";
 
@@ -170,24 +174,51 @@ export function llmLaneRoutes(db: Db) {
     const profile = typeof req.body?.profile === "string" ? (req.body.profile as string) : null;
     const region = typeof req.body?.region === "string" ? (req.body.region as string) : null;
     try {
+      // 저장 시점에 이름 모양을 본다. 로그인 버튼을 누를 때까지 미루면 사용자는
+      // 저장에 성공했다고 믿은 뒤에야 쓸 수 없는 이름이라는 것을 알게 된다.
+      if (profile?.trim()) assertValidProfileName(profile.trim());
       res.json(saveAwsSso({ profile, region }));
     } catch (error) {
       throw unprocessable(toMessage(error));
     }
   });
 
+  /**
+   * 이 PC의 AWS 환경. 자주 바뀌지 않으므로 상태 조회와 분리했다 — 상태 쪽은
+   * 로그인 중 몇 초마다 호출되는데, 거기에 CLI 실행을 하나 더 얹으면 승인만
+   * 기다리는 동안 프로세스를 계속 띄우게 된다.
+   */
+  router.get("/instance/aws-sso/environment", async (req, res) => {
+    assertCanManageLlmLanes(req);
+    const { configPath, profiles } = readAwsSsoProfiles();
+    res.json({ cli: await detectAwsCli(), configPath, profiles });
+  });
+
   router.get("/instance/aws-sso/status", async (req, res) => {
     assertCanManageLlmLanes(req);
     const settings = getLlmLaneSettings();
+    const login = readLoginState();
     if (!settings.awsSso.profile) {
-      res.json({ status: { state: "logged_out", message: "AWS SSO 프로필이 설정되지 않았습니다." }, login: readLoginState() });
+      res.json({
+        status: { state: "logged_out", message: "AWS SSO 프로필이 설정되지 않았습니다." },
+        login,
+      });
+      return;
+    }
+    // 로그인이 진행 중이면 자격증명을 물어봐야 답은 "아직"이다. 3초마다 CLI를
+    // 띄워 같은 답을 받을 이유가 없다.
+    if (login.state === "pending") {
+      res.json({
+        status: {
+          state: "logged_out",
+          message: "브라우저에서 승인이 끝나기를 기다리는 중입니다.",
+        },
+        login,
+      });
       return;
     }
     try {
-      res.json({
-        status: await getAwsSsoStatus(settings.awsSso.profile),
-        login: readLoginState(),
-      });
+      res.json({ status: await getAwsSsoStatus(settings.awsSso.profile), login });
     } catch (error) {
       throw unprocessable(toMessage(error));
     }
@@ -200,7 +231,11 @@ export function llmLaneRoutes(db: Db) {
       throw unprocessable("먼저 AWS SSO 프로필 이름을 저장하세요.");
     }
     try {
-      res.json(startAwsSsoLogin(settings.awsSso.profile));
+      res.json(
+        startAwsSsoLogin(settings.awsSso.profile, {
+          useDeviceCode: req.body?.useDeviceCode === true,
+        }),
+      );
     } catch (error) {
       throw unprocessable(toMessage(error));
     }
@@ -208,8 +243,20 @@ export function llmLaneRoutes(db: Db) {
 
   router.delete("/instance/aws-sso/login", async (req, res) => {
     assertCanManageLlmLanes(req);
-    cancelAwsSsoLogin();
-    res.json(readLoginState());
+    res.json(cancelAwsSsoLogin());
+  });
+
+  router.post("/instance/aws-sso/logout", async (req, res) => {
+    assertCanManageLlmLanes(req);
+    const settings = getLlmLaneSettings();
+    if (!settings.awsSso.profile) {
+      throw unprocessable("AWS SSO 프로필이 설정되지 않았습니다.");
+    }
+    try {
+      res.json(await logoutAwsSso(settings.awsSso.profile));
+    } catch (error) {
+      throw unprocessable(toMessage(error));
+    }
   });
 
   return router;

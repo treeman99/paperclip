@@ -339,6 +339,9 @@ export const queryKeys = {
     llmLanes: ["instance", "llm-lanes"] as const,
     llmLaneOptions: ["instance", "llm-lane-options"] as const,
     awsSso: ["instance", "aws-sso"] as const,
+    // awsSso 의 하위 키로 두지 않는다. 접두사가 겹치면 상태를 무효화할 때마다
+    // 이쪽까지 딸려와 `aws --version` 프로세스를 불필요하게 띄운다.
+    awsEnvironment: ["instance", "aws-environment"] as const,
   },
   cloudUpstreams: (companyId: string) => ["cloud-upstreams", companyId] as const,
   health: ["health"] as const,
